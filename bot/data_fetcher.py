@@ -4,9 +4,6 @@ from config.settings import SYMBOL, TIMEFRAME, LIMIT
 
 
 def fetch_klines():
-    """
-    Descarga velas de Binance y devuelve un DataFrame.
-    """
 
     url = "https://api.binance.com/api/v3/klines"
 
