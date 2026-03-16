@@ -1,33 +1,50 @@
 import requests
 import pandas as pd
-from datetime import datetime
+from config.settings import SYMBOL, TIMEFRAME, LIMIT
 
-BASE_URL = "https://api-futures.kucoin.com"
 
-def fetch_klines(symbol="XBTUSDTM", interval="1min", limit=200):
-    url = f"{BASE_URL}/api/v1/kline/query"
-    
+def fetch_klines():
+    """
+    Descarga velas de Binance y devuelve un DataFrame.
+    """
+
+    url = "https://api.binance.com/api/v3/klines"
+
     params = {
-        "symbol": symbol,
-        "granularity": 1,
-        "limit": limit
+        "symbol": SYMBOL,
+        "interval": TIMEFRAME,
+        "limit": LIMIT
     }
 
-    r = requests.get(url, params=params)
-    data = r.json()
+    response = requests.get(url, params=params)
 
-    if "data" not in data:
+    if response.status_code != 200:
         print("Error descargando datos")
         return None
 
-    df = pd.DataFrame(data["data"])
-    df.columns = ["time","open","close","high","low","volume","turnover"]
+    data = response.json()
 
-    df["time"] = pd.to_datetime(df["time"], unit="ms")
+    df = pd.DataFrame(data, columns=[
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "close_time",
+        "quote_asset_volume",
+        "number_of_trades",
+        "taker_buy_base_asset_volume",
+        "taker_buy_quote_asset_volume",
+        "ignore"
+    ])
+
+    df = df[["timestamp", "open", "high", "low", "close", "volume"]]
+
+    df["open"] = df["open"].astype(float)
+    df["high"] = df["high"].astype(float)
+    df["low"] = df["low"].astype(float)
+    df["close"] = df["close"].astype(float)
+    df["volume"] = df["volume"].astype(float)
 
     return df
-
-
-if __name__ == "__main__":
-    df = fetch_klines()
-    print(df.head())
