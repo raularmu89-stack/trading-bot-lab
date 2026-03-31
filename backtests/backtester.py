@@ -1,9 +1,10 @@
 class Backtester:
-    def __init__(self, strategy, data, min_candles=20, max_hold=10):
+    def __init__(self, strategy, data, min_candles=20, max_hold=10, verbose=True):
         self.strategy = strategy
         self.data = data
         self.min_candles = min_candles
         self.max_hold = max_hold  # velas maximas por trade antes de forzar cierre
+        self.verbose = verbose
 
     def run(self):
         trades = []
@@ -73,7 +74,8 @@ class Backtester:
         final_signal = self.strategy.generate_signal(self.data)
 
         if not trades:
-            print("Backtest completado: sin trades generados")
+            if self.verbose:
+                print("Backtest completado: sin trades generados")
             return {
                 "trades": 0,
                 "winrate": 0.0,
@@ -97,12 +99,13 @@ class Backtester:
 
         total_pnl = sum(t["pnl"] for t in trades)
 
-        print(
-            f"Backtest completado: {len(trades)} trades | "
-            f"winrate={winrate:.1%} | "
-            f"profit_factor={profit_factor:.2f} | "
-            f"pnl_total={total_pnl:.2%}"
-        )
+        if self.verbose:
+            print(
+                f"Backtest completado: {len(trades)} trades | "
+                f"winrate={winrate:.1%} | "
+                f"profit_factor={profit_factor:.2f} | "
+                f"pnl_total={total_pnl:.2%}"
+            )
 
         return {
             "trades": len(trades),
