@@ -1,27 +1,24 @@
 """
 backtester_fast.py
 
-Version O(n) del backtester: precomputa las señales para todo el dataset
-de una sola pasada en lugar de llamar a detect_market_structure n veces.
+Version O(n) del backtester: precomputa señales en una sola pasada.
 
-Usa el mismo criterio de entrada/salida que Backtester pero es ~100x mas rapido.
+Soporta:
+  - Salida por señal opuesta o max_hold velas (modo original)
+  - Stop Loss + Take Profit via RiskManager (comprueba high/low por vela)
 """
 
 import numpy as np
 
 
 def _precompute_signals(data, swing_window=5, require_fvg=False, use_choch_filter=True):
-    """
-    Calcula trend/bos/choch para cada vela en O(n * window).
-    Devuelve una lista de dicts con la señal en cada posicion.
-    """
+    """Calcula trend/bos/choch para cada vela en O(n * window)."""
     n = len(data)
     h = data["high"].values
     l = data["low"].values
     c = data["close"].values
     open_ = data["open"].values
 
-    # --- Swing detection (una sola pasada) ---
     swing_highs = np.zeros(n, dtype=bool)
     swing_lows = np.zeros(n, dtype=bool)
 
@@ -31,7 +28,6 @@ def _precompute_signals(data, swing_window=5, require_fvg=False, use_choch_filte
         if l[i] < l[i - swing_window:i].min() and l[i] <= l[i + 1:i + swing_window + 1].min():
             swing_lows[i] = True
 
-    # --- FVG detection (para require_fvg) ---
     bullish_fvg = np.zeros(n, dtype=bool)
     bearish_fvg = np.zeros(n, dtype=bool)
     if require_fvg:
@@ -41,9 +37,8 @@ def _precompute_signals(data, swing_window=5, require_fvg=False, use_choch_filte
             elif open_[i] < l[i - 2]:
                 bearish_fvg[i] = True
 
-    # --- Generar señal por vela ---
     signals = ["hold"] * n
-    sh_hist = []   # [(idx, price)]
+    sh_hist = []
     sl_hist = []
 
     for i in range(n):
@@ -58,7 +53,6 @@ def _precompute_signals(data, swing_window=5, require_fvg=False, use_choch_filte
         last_sh, prev_sh = sh_hist[-1], sh_hist[-2]
         last_sl, prev_sl = sl_hist[-1], sl_hist[-2]
 
-        # Tendencia por secuencia de swings
         if last_sh > prev_sh and last_sl > prev_sl:
             trend = "bullish"
         elif last_sh < prev_sh and last_sl < prev_sl:
@@ -81,7 +75,7 @@ def _precompute_signals(data, swing_window=5, require_fvg=False, use_choch_filte
             trend = "bearish"
 
         if use_choch_filter and choch:
-            continue  # hold
+            continue
 
         if trend == "bullish" and bos:
             if require_fvg and not bullish_fvg[i]:
@@ -95,18 +89,56 @@ def _precompute_signals(data, swing_window=5, require_fvg=False, use_choch_filte
     return signals
 
 
-def _run_trades(signals, closes, max_hold=10):
-    """Simula trades sobre la lista de señales precomputadas."""
+def _run_trades(signals, data, max_hold=10, risk_manager=None):
+    """
+    Simula trades sobre señales precomputadas.
+
+    Si risk_manager es None: salida por señal opuesta o max_hold velas.
+    Si risk_manager esta definido: salida por SL/TP (usando high/low) o
+    por señal opuesta/max_hold si ninguno se alcanza antes.
+    """
+    closes = data["close"].values
+    highs  = data["high"].values
+    lows   = data["low"].values
+
     trades = []
     position = None
 
     for i, sig in enumerate(signals):
         price = closes[i]
 
-        if position is None:
-            if sig in ("buy", "sell"):
-                position = {"side": sig, "entry": price, "idx": i}
-        else:
+        # ── Comprobar SL/TP si hay posicion abierta ──────────────────
+        if position is not None and risk_manager is not None:
+            sl = position["sl"]
+            tp = position["tp"]
+            side = position["side"]
+            entry = position["entry"]
+
+            if side == "buy":
+                if lows[i] <= sl:
+                    pnl = (sl - entry) / entry
+                    trades.append({"side": side, "pnl": pnl, "win": False, "exit": "sl"})
+                    position = None
+                    continue
+                elif highs[i] >= tp:
+                    pnl = (tp - entry) / entry
+                    trades.append({"side": side, "pnl": pnl, "win": True, "exit": "tp"})
+                    position = None
+                    continue
+            else:  # sell
+                if highs[i] >= sl:
+                    pnl = (entry - sl) / entry
+                    trades.append({"side": side, "pnl": pnl, "win": False, "exit": "sl"})
+                    position = None
+                    continue
+                elif lows[i] <= tp:
+                    pnl = (entry - tp) / entry
+                    trades.append({"side": side, "pnl": pnl, "win": True, "exit": "tp"})
+                    position = None
+                    continue
+
+        # ── Salida por señal opuesta o max_hold ──────────────────────
+        if position is not None:
             held = i - position["idx"]
             opposing = (position["side"] == "buy" and sig == "sell") or \
                        (position["side"] == "sell" and sig == "buy")
@@ -115,31 +147,40 @@ def _run_trades(signals, closes, max_hold=10):
                 entry = position["entry"]
                 pnl = (price - entry) / entry if position["side"] == "buy" \
                       else (entry - price) / entry
-                trades.append({"side": position["side"], "pnl": pnl, "win": pnl > 0})
+                trades.append({"side": position["side"], "pnl": pnl,
+                               "win": pnl > 0, "exit": "signal"})
                 position = None
-                if sig in ("buy", "sell"):
-                    position = {"side": sig, "entry": price, "idx": i}
 
-    # Cerrar posicion abierta al final
+        # ── Abrir nueva posicion ─────────────────────────────────────
+        if position is None and sig in ("buy", "sell"):
+            sl_price, tp_price = (None, None)
+            if risk_manager is not None:
+                window = data.iloc[: i + 1]
+                sl_price, tp_price = risk_manager.calculate_levels(window, price, sig)
+            position = {"side": sig, "entry": price, "idx": i,
+                        "sl": sl_price, "tp": tp_price}
+
+    # Cerrar posicion abierta al final del dataset
     if position is not None:
         price = closes[-1]
         entry = position["entry"]
         pnl = (price - entry) / entry if position["side"] == "buy" \
               else (entry - price) / entry
-        trades.append({"side": position["side"], "pnl": pnl, "win": pnl > 0})
+        trades.append({"side": position["side"], "pnl": pnl,
+                       "win": pnl > 0, "exit": "end"})
 
     return trades
 
 
-def _metrics(trades, signals, data):
-    from strategies.smc_strategy import SMCStrategy
+def _metrics(trades):
     final_signal = {"signal": "hold", "reason": "precomputed"}
 
     if not trades:
         return {"trades": 0, "winrate": 0.0, "profit_factor": 0.0,
-                "total_pnl": 0.0, "signal": final_signal}
+                "total_pnl": 0.0, "sl_hits": 0, "tp_hits": 0,
+                "signal": final_signal}
 
-    wins = [t for t in trades if t["win"]]
+    wins   = [t for t in trades if t["win"]]
     losses = [t for t in trades if not t["win"]]
     winrate = len(wins) / len(trades)
     gross_profit = sum(t["pnl"] for t in wins)
@@ -152,22 +193,28 @@ def _metrics(trades, signals, data):
     else:
         profit_factor = 0.0
 
+    sl_hits = sum(1 for t in trades if t.get("exit") == "sl")
+    tp_hits = sum(1 for t in trades if t.get("exit") == "tp")
+
     return {
-        "trades": len(trades),
-        "winrate": round(winrate, 4),
+        "trades":        len(trades),
+        "winrate":       round(winrate, 4),
         "profit_factor": round(profit_factor, 4),
-        "total_pnl": round(sum(t["pnl"] for t in trades), 4),
-        "signal": final_signal,
+        "total_pnl":     round(sum(t["pnl"] for t in trades), 4),
+        "sl_hits":       sl_hits,
+        "tp_hits":       tp_hits,
+        "signal":        final_signal,
     }
 
 
 class FastBacktester:
-    """Backtester O(n) — precomputa señales en una sola pasada."""
+    """Backtester O(n) con soporte opcional de SL/TP via RiskManager."""
 
-    def __init__(self, strategy, data, max_hold=10):
+    def __init__(self, strategy, data, max_hold=10, risk_manager=None):
         self.strategy = strategy
         self.data = data
         self.max_hold = max_hold
+        self.risk_manager = risk_manager
 
     def run(self):
         signals = _precompute_signals(
@@ -176,6 +223,5 @@ class FastBacktester:
             require_fvg=self.strategy.require_fvg,
             use_choch_filter=self.strategy.use_choch_filter,
         )
-        closes = self.data["close"].values
-        trades = _run_trades(signals, closes, self.max_hold)
-        return _metrics(trades, signals, self.data)
+        trades = _run_trades(signals, self.data, self.max_hold, self.risk_manager)
+        return _metrics(trades)
