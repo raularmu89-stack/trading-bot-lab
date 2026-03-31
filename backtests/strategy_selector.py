@@ -24,6 +24,7 @@ import pandas as pd
 from bot.data_fetcher import fetch_klines
 from strategies.smc_strategy import SMCStrategy
 from backtests.backtester import Backtester
+from backtests.backtester_fast import FastBacktester
 
 RESULTS_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "results.csv")
 
@@ -49,10 +50,11 @@ def _score(metrics):
     return (metrics["total_pnl"], metrics["profit_factor"])
 
 
-def run_selection(data, top_n=10):
+def run_selection(data, top_n=10, fast=True):
     combos = list(_build_combinations())
     total = len(combos)
-    print(f"Ejecutando {total} estrategias...\n")
+    BacktesterClass = FastBacktester if fast else Backtester
+    print(f"Ejecutando {total} estrategias {'(modo rapido)' if fast else ''}...\n")
 
     results = []
     for i, params in enumerate(combos):
@@ -61,12 +63,10 @@ def run_selection(data, top_n=10):
             require_fvg=params["require_fvg"],
             use_choch_filter=params["use_choch_filter"],
         )
-        backtester = Backtester(
-            strategy=strategy,
-            data=data,
-            max_hold=params["max_hold"],
-            verbose=False,
-        )
+        bt_kwargs = {"strategy": strategy, "data": data, "max_hold": params["max_hold"]}
+        if not fast:
+            bt_kwargs["verbose"] = False
+        backtester = BacktesterClass(**bt_kwargs)
         metrics = backtester.run()
 
         results.append({
