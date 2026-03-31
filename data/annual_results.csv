@@ -1,0 +1,13 @@
+pair,timeframe,total_pnl,winrate,profit_factor,trades,swing_window,max_hold,require_fvg,use_choch_filter
+BTCUSDT,1d,0.3555,0.6875,5.3057,16,7,5,False,True
+BTCUSDT,4h,1.5533,0.6203,1.8616,158,5,5,False,False
+BTCUSDT,1h,6.6886,0.6258,2.1936,604,10,5,False,False
+ETHUSDT,1d,0.2524,0.5263,2.1134,19,10,5,False,False
+ETHUSDT,4h,2.288,0.6364,2.4794,143,15,5,False,False
+ETHUSDT,1h,8.525,0.6408,2.3073,554,10,5,False,False
+XRPUSDT,1d,0.8416,0.68,5.4526,25,3,5,True,False
+XRPUSDT,4h,2.7241,0.6288,2.7047,132,7,5,False,False
+XRPUSDT,1h,10.7236,0.6308,2.1636,585,15,5,False,False
+SOLUSDT,1d,0.2797,0.5385,2.8353,13,7,5,False,True
+SOLUSDT,4h,2.1561,0.623,2.349,122,15,5,False,False
+SOLUSDT,1h,8.4253,0.6303,2.0798,541,15,5,False,False
