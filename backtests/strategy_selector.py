@@ -17,10 +17,15 @@ Criterio de seleccion:
 """
 
 import itertools
+import os
+
+import pandas as pd
 
 from bot.data_fetcher import fetch_klines
 from strategies.smc_strategy import SMCStrategy
 from backtests.backtester import Backtester
+
+RESULTS_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "results.csv")
 
 MIN_TRADES = 3
 
@@ -73,7 +78,29 @@ def run_selection(data, top_n=10):
             print(f"  [{i + 1:3d}/{total}] completadas...")
 
     results.sort(key=lambda x: _score(x["metrics"]), reverse=True)
-    return results[:top_n]
+    return results, results[:top_n]
+
+
+def save_csv(results, path=RESULTS_PATH):
+    rows = []
+    for rank, entry in enumerate(results, 1):
+        p = entry["params"]
+        m = entry["metrics"]
+        rows.append({
+            "rank":             rank,
+            "total_pnl":        m["total_pnl"],
+            "winrate":          m["winrate"],
+            "profit_factor":    m["profit_factor"],
+            "trades":           m["trades"],
+            "swing_window":     p["swing_window"],
+            "max_hold":         p["max_hold"],
+            "require_fvg":      p["require_fvg"],
+            "use_choch_filter": p["use_choch_filter"],
+        })
+    df = pd.DataFrame(rows)
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    df.to_csv(path, index=False)
+    print(f"Resultados guardados en: {os.path.abspath(path)}")
 
 
 def print_top(top):
@@ -114,10 +141,11 @@ def main():
         return
     print(f"Datos cargados: {len(data)} velas\n")
 
-    top = run_selection(data, top_n=10)
+    all_results, top = run_selection(data, top_n=10)
     print_top(top)
+    save_csv(all_results)
 
-    return top
+    return all_results, top
 
 
 if __name__ == "__main__":
