@@ -32,7 +32,7 @@ def test_precompute_signals_valid_values():
 
 
 def test_metrics_empty_trades():
-    result = _metrics([])
+    result = _metrics([], [1.0])
     assert result["trades"] == 0
     assert result["winrate"] == 0.0
     assert result["profit_factor"] == 0.0
@@ -41,7 +41,8 @@ def test_metrics_empty_trades():
 
 def test_metrics_all_wins():
     trades = [{"pnl": 0.05, "win": True, "exit": "tp"} for _ in range(5)]
-    result = _metrics(trades)
+    equity = [1.0, 1.05, 1.1025, 1.157625, 1.21550625, 1.2762815625]
+    result = _metrics(trades, equity)
     assert result["winrate"] == 1.0
     assert result["profit_factor"] == float("inf")
     assert result["total_pnl"] > 0
@@ -54,7 +55,8 @@ def test_metrics_mixed():
         {"pnl": 0.04, "win": True,  "exit": "tp"},
         {"pnl": -0.02, "win": False, "exit": "sl"},
     ]
-    result = _metrics(trades)
+    equity = [1.0, 1.04, 1.0192, 1.059968, 1.038769]
+    result = _metrics(trades, equity)
     assert result["winrate"] == 0.5
     assert abs(result["profit_factor"] - 2.0) < 0.01
     assert result["sl_hits"] == 2

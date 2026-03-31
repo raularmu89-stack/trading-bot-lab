@@ -6,9 +6,11 @@ Version O(n) del backtester: precomputa señales en una sola pasada.
 Soporta:
   - Salida por señal opuesta o max_hold velas (modo original)
   - Stop Loss + Take Profit via RiskManager (comprueba high/low por vela)
+  - Metricas de riesgo: Sharpe, Sortino, Max Drawdown, Calmar (via metrics.py)
 """
 
 import numpy as np
+from backtests.metrics import compute_all
 
 
 def _precompute_signals(data, swing_window=5, require_fvg=False, use_choch_filter=True):
@@ -96,13 +98,25 @@ def _run_trades(signals, data, max_hold=10, risk_manager=None):
     Si risk_manager es None: salida por señal opuesta o max_hold velas.
     Si risk_manager esta definido: salida por SL/TP (usando high/low) o
     por señal opuesta/max_hold si ninguno se alcanza antes.
+
+    Devuelve (trades, equity_curve) donde equity_curve comienza en 1.0
+    y acumula multiplicativamente los PnL de cada trade.
     """
     closes = data["close"].values
     highs  = data["high"].values
     lows   = data["low"].values
 
+    n_candles = len(closes)
     trades = []
+    # Equity candle-indexed (una entrada por vela) para annualizacion correcta
+    equity_candle = np.ones(n_candles)
+    current_equity = 1.0
     position = None
+
+    def _close_trade(side, pnl, win, exit_type):
+        nonlocal current_equity
+        trades.append({"side": side, "pnl": pnl, "win": win, "exit": exit_type})
+        current_equity *= (1 + pnl)
 
     for i, sig in enumerate(signals):
         price = closes[i]
@@ -116,26 +130,18 @@ def _run_trades(signals, data, max_hold=10, risk_manager=None):
 
             if side == "buy":
                 if lows[i] <= sl:
-                    pnl = (sl - entry) / entry
-                    trades.append({"side": side, "pnl": pnl, "win": False, "exit": "sl"})
+                    _close_trade(side, (sl - entry) / entry, False, "sl")
                     position = None
-                    continue
                 elif highs[i] >= tp:
-                    pnl = (tp - entry) / entry
-                    trades.append({"side": side, "pnl": pnl, "win": True, "exit": "tp"})
+                    _close_trade(side, (tp - entry) / entry, True, "tp")
                     position = None
-                    continue
             else:  # sell
                 if highs[i] >= sl:
-                    pnl = (entry - sl) / entry
-                    trades.append({"side": side, "pnl": pnl, "win": False, "exit": "sl"})
+                    _close_trade(side, (entry - sl) / entry, False, "sl")
                     position = None
-                    continue
                 elif lows[i] <= tp:
-                    pnl = (entry - tp) / entry
-                    trades.append({"side": side, "pnl": pnl, "win": True, "exit": "tp"})
+                    _close_trade(side, (entry - tp) / entry, True, "tp")
                     position = None
-                    continue
 
         # ── Salida por señal opuesta o max_hold ──────────────────────
         if position is not None:
@@ -147,8 +153,7 @@ def _run_trades(signals, data, max_hold=10, risk_manager=None):
                 entry = position["entry"]
                 pnl = (price - entry) / entry if position["side"] == "buy" \
                       else (entry - price) / entry
-                trades.append({"side": position["side"], "pnl": pnl,
-                               "win": pnl > 0, "exit": "signal"})
+                _close_trade(position["side"], pnl, pnl > 0, "signal")
                 position = None
 
         # ── Abrir nueva posicion ─────────────────────────────────────
@@ -160,25 +165,29 @@ def _run_trades(signals, data, max_hold=10, risk_manager=None):
             position = {"side": sig, "entry": price, "idx": i,
                         "sl": sl_price, "tp": tp_price}
 
+        # Registrar equity al cierre de cada vela (se propaga si no hay trade)
+        equity_candle[i] = current_equity
+
     # Cerrar posicion abierta al final del dataset
     if position is not None:
         price = closes[-1]
         entry = position["entry"]
         pnl = (price - entry) / entry if position["side"] == "buy" \
               else (entry - price) / entry
-        trades.append({"side": position["side"], "pnl": pnl,
-                       "win": pnl > 0, "exit": "end"})
+        _close_trade(position["side"], pnl, pnl > 0, "end")
+        equity_candle[n_candles - 1] = current_equity
 
-    return trades
+    return trades, equity_candle.tolist()
 
 
-def _metrics(trades):
+def _metrics(trades, equity_curve, periods_per_year=252):
     final_signal = {"signal": "hold", "reason": "precomputed"}
 
     if not trades:
         return {"trades": 0, "winrate": 0.0, "profit_factor": 0.0,
                 "total_pnl": 0.0, "sl_hits": 0, "tp_hits": 0,
-                "signal": final_signal}
+                "sharpe": 0.0, "sortino": 0.0, "max_drawdown": 0.0,
+                "calmar": 0.0, "signal": final_signal}
 
     wins   = [t for t in trades if t["win"]]
     losses = [t for t in trades if not t["win"]]
@@ -196,6 +205,8 @@ def _metrics(trades):
     sl_hits = sum(1 for t in trades if t.get("exit") == "sl")
     tp_hits = sum(1 for t in trades if t.get("exit") == "tp")
 
+    risk_metrics = compute_all(equity_curve, periods_per_year=periods_per_year)
+
     return {
         "trades":        len(trades),
         "winrate":       round(winrate, 4),
@@ -203,6 +214,11 @@ def _metrics(trades):
         "total_pnl":     round(sum(t["pnl"] for t in trades), 4),
         "sl_hits":       sl_hits,
         "tp_hits":       tp_hits,
+        "sharpe":        risk_metrics["sharpe"],
+        "sortino":       risk_metrics["sortino"],
+        "max_drawdown":  risk_metrics["max_drawdown"],
+        "calmar":        risk_metrics["calmar"],
+        "equity_curve":  equity_curve,
         "signal":        final_signal,
     }
 
@@ -216,12 +232,14 @@ class FastBacktester:
         self.max_hold = max_hold
         self.risk_manager = risk_manager
 
-    def run(self):
+    def run(self, periods_per_year=252):
         signals = _precompute_signals(
             self.data,
             swing_window=self.strategy.swing_window,
             require_fvg=self.strategy.require_fvg,
             use_choch_filter=self.strategy.use_choch_filter,
         )
-        trades = _run_trades(signals, self.data, self.max_hold, self.risk_manager)
-        return _metrics(trades)
+        trades, equity_curve = _run_trades(
+            signals, self.data, self.max_hold, self.risk_manager
+        )
+        return _metrics(trades, equity_curve, periods_per_year)
