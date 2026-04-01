@@ -169,9 +169,13 @@ class BollingerSqueezeStrategy:
 
         all_positive = bool(np.all(mom_window > 0))
         all_negative = bool(np.all(mom_window < 0))
-        # Momentum creciente para mayor convicción
-        rising  = bool(all_positive and mom_window[-1] >= mom_window[-2])
-        falling = bool(all_negative and mom_window[-1] <= mom_window[-2])
+        # Momentum creciente para mayor convicción (solo si hay 2+ barras)
+        if len(mom_window) >= 2:
+            rising  = bool(all_positive and mom_window[-1] >= mom_window[-2])
+            falling = bool(all_negative and mom_window[-1] <= mom_window[-2])
+        else:
+            rising  = all_positive
+            falling = all_negative
 
         if rising:
             signal = "buy"

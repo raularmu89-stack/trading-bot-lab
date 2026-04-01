@@ -72,10 +72,14 @@ def _gen_data(name: str, n: int = 35_040, seed: int = 42) -> pd.DataFrame:
         prices.append(max(1.0, prices[-1] * (1 + phases[i] / 100 + shock / 100)))
     prices = np.array(prices)
     spread = abs(rng.standard_normal(n)) * prices * 0.002
+    # open ≈ previous close → cuerpos de vela realistas
+    opens  = np.concatenate([[prices[0]], prices[:-1]])
+    highs  = np.maximum(opens, prices) + spread
+    lows   = np.maximum(np.minimum(opens, prices) - spread, prices * 0.98)
     return pd.DataFrame({
-        "open":   prices,
-        "high":   prices + spread,
-        "low":    np.maximum(prices - spread, prices * 0.98),
+        "open":   opens,
+        "high":   highs,
+        "low":    lows,
         "close":  prices,
         "volume": rng.integers(5000, 80000, n).astype(float),
     })
