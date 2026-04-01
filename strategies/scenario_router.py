@@ -33,13 +33,14 @@ Uso backtest (compatible con FastBacktester/KellyBacktester):
 
 from indicators.regime_detector import RegimeDetector
 
-from strategies.smc_strategy       import SMCStrategy
-from strategies.trend_rider        import TrendRiderStrategy
-from strategies.range_scalper      import RangeScalperStrategy
-from strategies.breakout_strategy  import BreakoutStrategy
-from strategies.ob_rejection       import OBRejectionStrategy
-from strategies.mean_reversion     import MeanReversionStrategy
-from strategies.mtf_strategy       import MTFStrategy
+from strategies.smc_strategy        import SMCStrategy
+from strategies.trend_rider         import TrendRiderStrategy
+from strategies.range_scalper       import RangeScalperStrategy
+from strategies.breakout_strategy   import BreakoutStrategy
+from strategies.ob_rejection        import OBRejectionStrategy
+from strategies.mean_reversion      import MeanReversionStrategy
+from strategies.volatility_filter   import VolatilityFilterStrategy
+from strategies.mtf_strategy        import MTFStrategy
 
 
 # Mapeo régimen → nombre de estrategia
@@ -108,6 +109,7 @@ class ScenarioRouter:
         # Sub-estrategias
         self._strategies = {
             "smc_fallback": SMCStrategy(swing_window=swing_window),
+            "volatility_filter": VolatilityFilterStrategy(swing_window=swing_window),
             "trend_rider": TrendRiderStrategy(
                 swing_window=swing_window,
                 adx_threshold=trend_adx_threshold,
@@ -147,15 +149,15 @@ class ScenarioRouter:
         # Override para debug
         strat_name = self.override_strategy or REGIME_TO_STRATEGY.get(regime, "smc_fallback")
 
-        # Alta volatilidad → siempre hold
+        # Alta volatilidad → delegar a VolatilityFilterStrategy
         if strat_name == "hold":
-            result = {
-                "signal": "hold",
-                "reason": f"Alta volatilidad — esperando (ATR {regime_info.get('atr_ratio', 0):.1f}×)",
-            }
-        else:
-            strategy = self._strategies.get(strat_name, self._strategies["smc_fallback"])
-            result   = strategy.generate_signal(data)
+            strat_name = "volatility_filter"
+
+        strategy = self._strategies.get(strat_name, self._strategies["smc_fallback"])
+        result   = strategy.generate_signal(data)
+        if self.verbose and strat_name == "volatility_filter":
+            result["size_reduction"] = result.get("size_reduction",
+                                                   strategy.size_reduction_factor)
 
         if self.verbose:
             result["regime"]        = regime
