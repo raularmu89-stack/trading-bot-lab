@@ -187,7 +187,8 @@ def _metrics(trades, equity_curve, periods_per_year=252):
         return {"trades": 0, "winrate": 0.0, "profit_factor": 0.0,
                 "total_pnl": 0.0, "sl_hits": 0, "tp_hits": 0,
                 "sharpe": 0.0, "sortino": 0.0, "max_drawdown": 0.0,
-                "calmar": 0.0, "signal": final_signal}
+                "calmar": 0.0, "equity_curve": equity_curve,
+                "signal": final_signal}
 
     wins   = [t for t in trades if t["win"]]
     losses = [t for t in trades if not t["win"]]
