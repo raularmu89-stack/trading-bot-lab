@@ -41,6 +41,9 @@ from strategies.ob_rejection        import OBRejectionStrategy
 from strategies.mean_reversion      import MeanReversionStrategy
 from strategies.volatility_filter   import VolatilityFilterStrategy
 from strategies.mtf_strategy        import MTFStrategy
+from strategies.macd_divergence     import MACDDivergenceStrategy
+from strategies.bollinger_squeeze   import BollingerSqueezeStrategy
+from strategies.momentum_burst      import MomentumBurstStrategy
 
 
 # Mapeo régimen → nombre de estrategia
@@ -134,6 +137,11 @@ class ScenarioRouter:
                 rsi_overbought=mr_rsi_overbought,
             ),
         }
+        # Estrategias adicionales disponibles (asignables via override_strategy)
+        self._strategies["macd_divergence"]   = MACDDivergenceStrategy()
+        self._strategies["bollinger_squeeze"] = BollingerSqueezeStrategy()
+        self._strategies["momentum_burst"]    = MomentumBurstStrategy()
+
         if use_mtf_trend:
             self._strategies["trend_rider"] = MTFStrategy(
                 high_tf="4h", high_tf_window=10, low_tf_window=swing_window,
