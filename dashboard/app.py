@@ -277,6 +277,41 @@ def api_backtest_summary():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/live")
+def api_live():
+    """Estado en tiempo real del live trader (posiciones, P&L, stats)."""
+    try:
+        state_file = "data/live_state.json"
+        if not os.path.exists(state_file):
+            return jsonify({"status": "stopped", "message": "Bot no iniciado"})
+        with open(state_file) as f:
+            state = json.load(f)
+        age = time.time() - state.get("timestamp", 0)
+        state["data_age_seconds"] = round(age, 0)
+        state["status"] = "running" if age < 7200 else "stale"
+        return jsonify(state)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/live/positions")
+def api_live_positions():
+    """Solo las posiciones abiertas."""
+    try:
+        pos_file = "data/positions.json"
+        if not os.path.exists(pos_file):
+            return jsonify({"open": [], "closed": []})
+        with open(pos_file) as f:
+            data = json.load(f)
+        return jsonify({
+            "open":   data.get("open_positions", []),
+            "closed": data.get("closed_trades", [])[-10:],
+            "stats":  data.get("stats", {}),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/status")
 def api_status():
     """Estado del sistema."""
