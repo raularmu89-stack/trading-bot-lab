@@ -1,0 +1,24 @@
+{
+  "timestamp": 1775166789.9265423,
+  "datetime": "2026-04-02T21:53:09.926543+00:00",
+  "mode": "paper",
+  "strategy": "MTF-SMC(sw5,ema4h50)+RM ATR\u00d71 RR=2",
+  "cycle": 1,
+  "usdt_balance": 1000.0,
+  "open_positions": [],
+  "stats": {
+    "total_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "winrate": 0.0,
+    "total_pnl_usdt": 0.0,
+    "avg_pnl_usdt": 0.0,
+    "profit_factor": 0.0,
+    "open_positions": 0,
+    "open_symbols": [],
+    "tp_hits": 0,
+    "sl_hits": 0
+  },
+  "recent_trades": [],
+  "kelly_fraction": 2.0
+}

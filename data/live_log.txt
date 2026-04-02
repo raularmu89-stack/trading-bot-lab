@@ -1,0 +1,37 @@
+[2026-04-02 21:52:38 UTC] LiveTrader iniciado | paper=True | capital=1000.0 USDT
+[2026-04-02 21:52:38 UTC] Estrategia: MTF-SMC(sw=5,ema4h=50) + RM ATR×1.0 RR=2.0
+[2026-04-02 21:52:38 UTC] Pares: BTC-USDT, ETH-USDT, SOL-USDT, XRP-USDT, BNB-USDT, ADA-USDT, AVAX-USDT, DOGE-USDT, LTC-USDT, DOT-USDT
+[2026-04-02 21:52:38 UTC] 🚀 Trading loop iniciado
+[2026-04-02 21:52:38 UTC]    Intervalo: cada 60 minutos
+[2026-04-02 21:52:38 UTC]    Modo: PAPER 📄
+[2026-04-02 21:52:38 UTC] ── Ciclo #1 ──────────────────────
+[2026-04-02 21:52:41 UTC]   Datos: 10/10 pares OK
+[2026-04-02 21:52:41 UTC]   Balance USDT: 1000.00  |  Trades: 0  |  WR: 0.0%  |  P&L neto: +0.0000 USDT  |  Posiciones abiertas: 0
+[2026-04-02 21:52:41 UTC] ✅ Trading loop detenido.
+[2026-04-02 21:52:52 UTC] LiveTrader iniciado | paper=True | capital=1000.0 USDT
+[2026-04-02 21:52:52 UTC] Estrategia: MTF-SMC(sw=5,ema4h=50) + RM ATR×1.0 RR=2.0
+[2026-04-02 21:52:52 UTC] Pares: BTC-USDT, ETH-USDT, SOL-USDT, XRP-USDT, BNB-USDT, ADA-USDT, AVAX-USDT, DOGE-USDT, LTC-USDT, DOT-USDT
+[2026-04-02 21:52:52 UTC] 🚀 Trading loop iniciado
+[2026-04-02 21:52:52 UTC]    Intervalo: cada 60 minutos
+[2026-04-02 21:52:52 UTC]    Modo: PAPER 📄
+[2026-04-02 21:52:52 UTC] ── Ciclo #1 ──────────────────────
+[2026-04-02 21:52:56 UTC]   Datos: 10/10 pares OK
+[2026-04-02 21:52:56 UTC]   Balance USDT: 1000.00  |  Trades: 0  |  WR: 0.0%  |  P&L neto: +0.0000 USDT  |  Posiciones abiertas: 0
+[2026-04-02 21:52:56 UTC] ✅ Trading loop detenido.
+[2026-04-02 21:53:05 UTC] LiveTrader iniciado | paper=True | capital=1000.0 USDT
+[2026-04-02 21:53:05 UTC] Estrategia: MTF-SMC(sw=5,ema4h=50) + RM ATR×1.0 RR=2.0
+[2026-04-02 21:53:05 UTC] Pares: BTC-USDT, ETH-USDT, SOL-USDT, XRP-USDT, BNB-USDT, ADA-USDT, AVAX-USDT, DOGE-USDT, LTC-USDT, DOT-USDT
+[2026-04-02 21:53:05 UTC] 🚀 Trading loop iniciado
+[2026-04-02 21:53:05 UTC]    Intervalo: cada 60 minutos
+[2026-04-02 21:53:05 UTC]    Modo: PAPER 📄
+[2026-04-02 21:53:05 UTC] ── Ciclo #1 ──────────────────────
+[2026-04-02 21:53:09 UTC]   Datos: 10/10 pares OK
+[2026-04-02 21:53:09 UTC]   Balance USDT: 1000.00  |  Trades: 0  |  WR: 0.0%  |  P&L neto: +0.0000 USDT  |  Posiciones abiertas: 0
+[2026-04-02 21:53:09 UTC] ✅ Trading loop detenido.
+[2026-04-02 21:53:09 UTC] 
+  PAPER SUMMARY:
+[2026-04-02 21:53:09 UTC]     Balance USDT  : 1000.00
+[2026-04-02 21:53:09 UTC]     Open pos value: 0.00
+[2026-04-02 21:53:09 UTC]     Total value   : 1000.00
+[2026-04-02 21:53:09 UTC]     Total trades  : 0
+[2026-04-02 21:53:09 UTC]     Total fees    : 0.0000
