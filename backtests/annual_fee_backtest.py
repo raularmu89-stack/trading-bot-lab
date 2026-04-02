@@ -45,8 +45,9 @@ from strategies.kelly_sizer    import KellySizer
 from strategies.smc_strategy   import SMCStrategy
 from strategies.strategy_zoo2  import (
     ParabolicSARStrategy, WilliamsRStrategy, HeikinAshiStrategy,
+    MFIStrategy, KeltnerBreakoutStrategy,
 )
-from strategies.strategy_zoo   import CCIStrategy
+from strategies.strategy_zoo   import CCIStrategy, EngulfingStrategy
 from strategies.swing_strategies import (
     ChandelierExitStrategy, TurtleBreakoutStrategy, MultiEMASwingStrategy,
 )
@@ -91,9 +92,21 @@ STRATEGIES = [
     ("HA(cb2,et100)",
      HeikinAshiStrategy(confirm_bars=2, ema_trend=100)),
 
+    ("SAR(af0.02,m0.2,et200)",
+     ParabolicSARStrategy(af_start=0.02, af_max=0.2, ema_trend=200)),
+
+    ("Chandelier(p30,m3,et200)",
+     ChandelierExitStrategy(period=30, mult=3.0, ema_trend=200)),
+
+    ("MultiEMA(34/89/200,ADX>25)",
+     MultiEMASwingStrategy(e1=34, e2=89, e3=200, adx_thresh=25)),
+
     # ── Ganadoras Torneos R1/R2 (validadas en Fee Analysis anterior) ─────
     ("SMC(sw5,hold48)",
      SMCStrategy(swing_window=5)),
+
+    ("SMC(sw7,hold48)",
+     SMCStrategy(swing_window=7)),
 
     ("HeikinAshi(cb2,et100) [R2]",
      HeikinAshiStrategy(confirm_bars=2, ema_trend=100)),
@@ -103,6 +116,19 @@ STRATEGIES = [
 
     ("WR(p28,os-80) [R2]",
      WilliamsRStrategy(period=28, oversold=-80, ema_trend=50)),
+
+    # ── R2 Top (no incluidas antes) ───────────────────────────────────────
+    ("MFI(p14,os20,et50)",
+     MFIStrategy(period=14, oversold=20, overbought=80, ema_trend=50)),
+
+    ("MFI(p14,os25,et50)",
+     MFIStrategy(period=14, oversold=25, overbought=75, ema_trend=50)),
+
+    ("Keltner(ema20,m2,cb3)",
+     KeltnerBreakoutStrategy(ema_period=20, mult=2.0, confirm_bars=3)),
+
+    ("Engulfing(et100,bm1.2) [R1]",
+     EngulfingStrategy(ema_trend=100, body_mult=1.2)),
 ]
 
 
