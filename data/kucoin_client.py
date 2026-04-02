@@ -179,6 +179,45 @@ class KuCoinClient:
 
         return df
 
+    def get_ohlcv_paginated(self, symbol: str,
+                             interval: str = "4hour",
+                             days: int = 365) -> pd.DataFrame:
+        """
+        Obtiene hasta N días de datos paginando en bloques de 1500 velas.
+
+        Útil para backtests anuales donde 1500 velas a 4H solo dan ~250 días.
+        """
+        interval = INTERVAL_ALIASES.get(interval, interval)
+        if interval not in VALID_INTERVALS:
+            raise ValueError(f"Intervalo inválido: {interval}")
+
+        step_sec = INTERVAL_SECONDS[interval]
+        total_candles = int(days * 86400 / step_sec)
+
+        now       = int(time.time())
+        end_time  = now
+        all_dfs   = []
+
+        while total_candles > 0:
+            batch = min(total_candles, MAX_CANDLES_PER_REQUEST)
+            start_time = end_time - step_sec * batch
+            df = self.get_ohlcv(symbol, interval, limit=batch,
+                                start_time=start_time, end_time=end_time)
+            if df is None or df.empty:
+                break
+            all_dfs.append(df)
+            total_candles -= batch
+            end_time = start_time - step_sec   # siguiente bloque más atrás
+            time.sleep(0.2)
+
+        if not all_dfs:
+            return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+        combined = pd.concat(reversed(all_dfs))
+        combined = combined[~combined.index.duplicated(keep="last")]
+        combined = combined.sort_index()
+        return combined
+
     def get_multi_ohlcv(self, symbols: list,
                          interval: str = "1hour",
                          limit: int = 200) -> dict:
