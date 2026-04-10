@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}{{ vehicle.plate }} — Detalle{% endblock %}
+
+{% block content %}
+<h1>{{ vehicle.brand }} {{ vehicle.model }}
+  <span class="badge badge-{{ vehicle.status }}">{{ vehicle.status|status_label }}</span>
+</h1>
+
+<dl class="detail">
+  <dt>Matrícula</dt><dd>{{ vehicle.plate }}</dd>
+  <dt>Año</dt><dd>{{ vehicle.year }}</dd>
+  <dt>Color</dt><dd>{{ vehicle.color or "—" }}</dd>
+  <dt>Combustible</dt><dd>{{ vehicle.fuel_type|fuel_label }}</dd>
+  <dt>Kilometraje</dt><dd>{{ "{:,}".format(vehicle.mileage or 0).replace(",", ".") }} km</dd>
+  <dt>Propietario</dt><dd>{{ vehicle.owner or "—" }}</dd>
+  <dt>Registrado</dt><dd>{{ vehicle.created_at }}</dd>
+  <dt>Actualizado</dt><dd>{{ vehicle.updated_at }}</dd>
+</dl>
+
+<div class="form-actions">
+  <a class="btn btn-primary" href="{{ url_for('edit_vehicle', vehicle_id=vehicle.id) }}">Editar</a>
+  <a class="btn btn-ghost" href="{{ url_for('index') }}">Volver</a>
+  <form method="post" action="{{ url_for('delete_vehicle', vehicle_id=vehicle.id) }}"
+        onsubmit="return confirm('¿Eliminar el vehículo {{ vehicle.plate }}?');">
+    <button type="submit" class="btn btn-danger">Eliminar</button>
+  </form>
+</div>
+{% endblock %}

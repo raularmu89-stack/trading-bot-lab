@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}{{ title }}{% endblock %}
+
+{% block content %}
+<h1>{{ title }}</h1>
+
+<form class="vehicle-form" method="post" action="{{ action_url }}">
+  <div class="grid">
+    <label>
+      Matrícula *
+      <input type="text" name="plate" required maxlength="15"
+             value="{{ vehicle.plate if vehicle else '' }}">
+    </label>
+
+    <label>
+      Marca *
+      <input type="text" name="brand" required maxlength="40"
+             value="{{ vehicle.brand if vehicle else '' }}">
+    </label>
+
+    <label>
+      Modelo *
+      <input type="text" name="model" required maxlength="60"
+             value="{{ vehicle.model if vehicle else '' }}">
+    </label>
+
+    <label>
+      Año *
+      <input type="number" name="year" required min="1900" max="2100"
+             value="{{ vehicle.year if vehicle else '' }}">
+    </label>
+
+    <label>
+      Color
+      <input type="text" name="color" maxlength="30"
+             value="{{ vehicle.color if vehicle and vehicle.color else '' }}">
+    </label>
+
+    <label>
+      Combustible
+      <select name="fuel_type">
+        <option value="">—</option>
+        {% for f in fuels %}
+          <option value="{{ f }}"
+            {% if vehicle and vehicle.fuel_type == f %}selected{% endif %}>
+            {{ f|fuel_label }}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>
+      Kilometraje
+      <input type="number" name="mileage" min="0"
+             value="{{ vehicle.mileage if vehicle and vehicle.mileage is not none else 0 }}">
+    </label>
+
+    <label>
+      Propietario
+      <input type="text" name="owner" maxlength="80"
+             value="{{ vehicle.owner if vehicle and vehicle.owner else '' }}">
+    </label>
+
+    <label>
+      Estado
+      <select name="status">
+        {% for s in statuses %}
+          <option value="{{ s }}"
+            {% if vehicle and vehicle.status == s %}selected{% endif %}>
+            {{ s|status_label }}
+          </option>
+        {% endfor %}
+      </select>
+    </label>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">Guardar</button>
+    <a class="btn btn-ghost" href="{{ url_for('index') }}">Cancelar</a>
+  </div>
+</form>
+{% endblock %}
