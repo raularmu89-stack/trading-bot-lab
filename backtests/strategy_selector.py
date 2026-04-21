@@ -47,7 +47,10 @@ def _build_combinations():
 def _score(metrics):
     if metrics["trades"] < MIN_TRADES:
         return (float("-inf"), 0.0)
-    return (metrics["total_pnl"], metrics["profit_factor"])
+    # expectancy (pnl medio por trade) es más robusto que total_pnl:
+    # no favorece estrategias que operan más para acumular PnL bruto.
+    # desempate por profit_factor.
+    return (metrics.get("expectancy", metrics["total_pnl"]), metrics["profit_factor"])
 
 
 def run_selection(data, top_n=10, fast=True):
@@ -89,8 +92,11 @@ def save_csv(results, path=RESULTS_PATH):
         rows.append({
             "rank":             rank,
             "total_pnl":        m["total_pnl"],
+            "expectancy":       m.get("expectancy", 0.0),
             "winrate":          m["winrate"],
             "profit_factor":    m["profit_factor"],
+            "sharpe":           m.get("sharpe", 0.0),
+            "max_drawdown":     m.get("max_drawdown", 0.0),
             "trades":           m["trades"],
             "swing_window":     p["swing_window"],
             "max_hold":         p["max_hold"],
