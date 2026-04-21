@@ -28,7 +28,7 @@ from backtests.backtester_fast import FastBacktester
 
 RESULTS_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "results.csv")
 
-MIN_TRADES = 3
+MIN_TRADES = 10
 
 PARAM_GRID = {
     "swing_window":     [3, 5, 7, 10, 15],

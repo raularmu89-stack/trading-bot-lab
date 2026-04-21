@@ -1,20 +1,25 @@
 """
 backtester.py
 
-Backtester con modelo de ejecución realista:
-  - SL/TP basados en ATR, fijados en la entrada
-  - Comisiones round-trip configurables (default 0.1% por lado = KuCoin taker)
-  - Slippage como fracción del precio (default 0, configurable)
-  - Equity curve compuesta vela a vela
-  - Métricas completas: Sharpe, Sortino, max drawdown, Calmar, expectancy
+Backtester con modelo de ejecución realista.
 
-Interfaz pública sin cambios: Backtester(strategy, data, ...).run() → dict
-Los campos originales (trades, winrate, profit_factor, total_pnl, signal)
-siguen presentes. Se añaden los campos nuevos.
+Modelo de ejecución:
+  - Señal generada en close[i]
+  - Entrada en open[i+1] — elimina el look-ahead bias del bloque anterior
+  - SL/TP fijados desde el precio de entrada (ATR de la vela de señal)
+  - SL/TP comprobados en high/low de cada vela siguiente
+  - Si SL y TP caen en la misma vela, SL tiene prioridad (conservador)
+  - Salida por señal opuesta: close[i] con slippage
+  - Slippage adverso en SL (market order); no en TP (limit order)
+  - Comisiones round-trip: 2 × fee_rate
 
-Limitación conocida: entrada en close[i] de la vela de señal.
-Introduce un sesgo de look-ahead menor (precio de cierre conocido al fin
-de vela). El siguiente paso natural sería entrar en open[i+1].
+Nota sobre total_pnl:
+  Es la suma aditiva de pnl_net por trade, no el retorno compuesto.
+  Para retorno compuesto real: equity_curve[-1] - 1.
+  Las métricas de riesgo (Sharpe, drawdown, Calmar) usan la equity curve
+  compuesta, no total_pnl.
+
+Interfaz pública estable: Backtester(strategy, data, ...).run() → dict
 """
 
 import numpy as np
@@ -25,32 +30,33 @@ class Backtester:
     """
     Parámetros
     ----------
-    strategy       : objeto con .generate_signal(window) → {"signal": str}
-    data           : DataFrame con columnas open/high/low/close/volume
-    sl_atr_mult    : multiplicador ATR para stop-loss  (default 2.0)
-    tp_atr_mult    : multiplicador ATR para take-profit (default 4.0 → RR 1:2)
-    atr_period     : periodo ATR suavizado Wilder (default 14)
-    fee_rate       : comisión por lado como fracción (default 0.001 = 0.1%)
-    slippage_pct   : slippage adicional sobre el precio de entrada (default 0)
-    max_hold       : velas máximas antes de forzar cierre (fallback, no estrategia)
-    min_candles    : velas mínimas antes de empezar a generar señales
-    periods_per_year: para anualizaciones (252=diario, 8760=1h crypto)
-    verbose        : imprimir resumen al finalizar
+    strategy         : objeto con .generate_signal(window) → {"signal": str}
+    data             : DataFrame con columnas open/high/low/close/volume
+    sl_atr_mult      : multiplicador ATR para stop-loss  (default 2.0)
+    tp_atr_mult      : multiplicador ATR para take-profit (default 4.0 → RR 1:2)
+    atr_period       : periodo ATR Wilder (default 14)
+    fee_rate         : comisión por lado como fracción (default 0.001 = 0.1%)
+    slippage_pct     : slippage sobre el precio, aplicado adversamente
+                       en entry y SL exits (default 0.0)
+    max_hold         : velas máximas como timeout de último recurso
+    min_candles      : velas mínimas antes de generar señales
+    periods_per_year : para anualizaciones (252=diario, 8760=1h crypto)
+    verbose          : imprimir resumen al finalizar
     """
 
     def __init__(
         self,
         strategy,
         data,
-        sl_atr_mult    = 2.0,
-        tp_atr_mult    = 4.0,
-        atr_period     = 14,
-        fee_rate       = 0.001,
-        slippage_pct   = 0.0,
-        max_hold       = 20,
-        min_candles    = 20,
+        sl_atr_mult      = 2.0,
+        tp_atr_mult      = 4.0,
+        atr_period       = 14,
+        fee_rate         = 0.001,
+        slippage_pct     = 0.0,
+        max_hold         = 20,
+        min_candles      = 20,
         periods_per_year = 252,
-        verbose        = True,
+        verbose          = True,
     ):
         self.strategy        = strategy
         self.data            = data
@@ -64,7 +70,7 @@ class Backtester:
         self.periods_per_year = periods_per_year
         self.verbose         = verbose
 
-    # ── ATR (Wilder smoothing) ─────────────────────────────────────────────
+    # ── ATR Wilder smoothing ──────────────────────────────────────────────
 
     def _compute_atr(self):
         h = self.data["high"].values.astype(float)
@@ -80,22 +86,20 @@ class Backtester:
 
         atr = np.full(n, np.nan)
         if n >= p:
-            atr[p - 1] = tr[:p].mean()
+            atr[p - 1] = tr[:p].mean()       # seed: media simple estándar
             for i in range(p, n):
-                atr[i] = (atr[i-1] * (p - 1) + tr[i]) / p
+                atr[i] = (atr[i-1] * (p - 1) + tr[i]) / p   # Wilder: α=1/p
         return atr
 
-    # ── SL/TP check intra-vela ────────────────────────────────────────────
+    # ── SL/TP check intra-vela ─────────────────────────────────────────────
 
     def _check_sl_tp(self, position, high, low):
         """
-        Comprueba si SL o TP fue tocado durante la vela actual.
+        Detecta si SL o TP fue tocado durante la vela usando high/low.
 
-        Usa high/low — no el close — para detectar niveles intravela.
-        Si ambos se tocan en la misma vela (posible en gaps o alta volatilidad),
-        asume SL primero: postura conservadora que evita sobrestimar el PnL.
-
-        Retorna (razón: str | None, precio_de_salida: float | None)
+        Cuando ambos niveles caen dentro del rango de la vela (gap extremo
+        o alta volatilidad), SL tiene prioridad sobre TP.
+        Esto es conservador: asume el peor orden de ejecución posible.
         """
         sl = position["sl"]
         tp = position["tp"]
@@ -107,6 +111,7 @@ class Backtester:
             sl_hit = high >= sl
             tp_hit = low <= tp
 
+        # SL comprobado primero — conservador, evita sobreestimar PnL
         if sl_hit:
             return "sl", sl
         if tp_hit:
@@ -119,10 +124,9 @@ class Backtester:
         entry = position["entry_price"]
         side  = position["side"]
 
-        raw_pnl = (exit_price - entry) / entry if side == "buy" \
-                  else (entry - exit_price) / entry
-
-        fee_total = 2 * self.fee_rate   # entrada + salida
+        raw_pnl   = (exit_price - entry) / entry if side == "buy" \
+                    else (entry - exit_price) / entry
+        fee_total = 2 * self.fee_rate        # entrada + salida, un lado cada una
         pnl_net   = raw_pnl - fee_total
 
         return {
@@ -135,8 +139,7 @@ class Backtester:
             "raw_pnl":     round(raw_pnl, 6),
             "fee":         round(fee_total, 6),
             "pnl_net":     round(pnl_net, 6),
-            # alias para compatibilidad con código existente
-            "pnl":         round(pnl_net, 6),
+            "pnl":         round(pnl_net, 6),   # alias compatibilidad
             "win":         pnl_net > 0,
         }
 
@@ -144,6 +147,7 @@ class Backtester:
 
     def run(self):
         atr    = self._compute_atr()
+        opens  = self.data["open"].values.astype(float)
         closes = self.data["close"].values.astype(float)
         highs  = self.data["high"].values.astype(float)
         lows   = self.data["low"].values.astype(float)
@@ -154,35 +158,73 @@ class Backtester:
         capital  = 1.0
         equity   = []
 
+        # pending: señal confirmada en close[i], ejecutar en open[i+1]
+        # formato: (side: str, atr_value: float)
+        pending  = None
+
         for i in range(n):
             equity.append(capital)
+
+            # ── 0. Ejecutar entrada pendiente al open de esta vela ─────────
+            # La señal se generó en close[i-1]; ahora entramos en open[i].
+            # SL/TP se calculan desde el precio de entrada real (open[i]),
+            # usando el ATR de la vela de señal (conservado en pending).
+            if pending is not None and position is None:
+                side_p, atr_p = pending
+                pending = None
+
+                entry = opens[i]
+                slip  = entry * self.slippage_pct
+
+                if side_p == "buy":
+                    entry += slip
+                    sl = entry - self.sl_atr_mult * atr_p
+                    tp = entry + self.tp_atr_mult * atr_p
+                else:
+                    entry -= slip
+                    sl = entry + self.sl_atr_mult * atr_p
+                    tp = entry - self.tp_atr_mult * atr_p
+
+                position = {
+                    "side":        side_p,
+                    "entry_price": entry,
+                    "entry_idx":   i,
+                    "sl":          sl,
+                    "tp":          tp,
+                }
 
             if i < self.min_candles:
                 continue
 
-            # ── 1. Gestionar posición abierta ─────────────────────────────
+            # ── 1. Gestionar posición abierta ──────────────────────────────
             if position is not None:
-                # a) SL/TP intravela
                 reason, exit_px = self._check_sl_tp(position, highs[i], lows[i])
 
-                # b) Timeout: max_hold como último recurso (no como estrategia)
+                # Timeout: último recurso, no estrategia de salida
                 if reason is None and (i - position["entry_idx"]) >= self.max_hold:
                     reason  = "max_hold"
                     exit_px = closes[i]
 
                 if reason is not None:
+                    # Slippage adverso solo en SL (market order fill peor que el nivel).
+                    # TP es limit order: se llena al precio pedido o mejor.
+                    if reason == "sl":
+                        slip = exit_px * self.slippage_pct
+                        exit_px = exit_px - slip if position["side"] == "buy" \
+                                  else exit_px + slip
+
                     trade    = self._close(position, exit_px, reason, i)
                     capital *= (1 + trade["pnl_net"])
                     equity[-1] = capital
                     trades.append(trade)
                     position = None
 
-            # ── 2. Señal en esta vela ─────────────────────────────────────
-            window = self.data.iloc[: i + 1]
-            sig    = self.strategy.generate_signal(window)
+            # ── 2. Señal en close[i] ────────────────────────────────────────
+            window  = self.data.iloc[: i + 1]
+            sig     = self.strategy.generate_signal(window)
             sig_val = sig.get("signal", "hold")
 
-            # Señal opuesta a posición abierta → cerrar a close[i]
+            # ── 3. Señal opuesta → cerrar posición a close[i] ──────────────
             if position is not None:
                 opp = (position["side"] == "buy"  and sig_val == "sell") or \
                       (position["side"] == "sell" and sig_val == "buy")
@@ -195,32 +237,18 @@ class Backtester:
                     equity[-1] = capital
                     trades.append(trade)
                     position = None
+                    # Encolar la señal nueva para abrir en open[i+1]
+                    a = atr[i]
+                    if not np.isnan(a) and a > 0:
+                        pending = (sig_val, a)
 
-            # ── 3. Abrir nueva posición ───────────────────────────────────
-            if position is None and sig_val in ("buy", "sell"):
+            # ── 4. Sin posición → encolar señal para open[i+1] ─────────────
+            if position is None and pending is None and sig_val in ("buy", "sell"):
                 a = atr[i]
-                if np.isnan(a) or a <= 0:
-                    continue
+                if not np.isnan(a) and a > 0:
+                    pending = (sig_val, a)
 
-                slip  = closes[i] * self.slippage_pct
-                if sig_val == "buy":
-                    entry = closes[i] + slip
-                    sl    = entry - self.sl_atr_mult * a
-                    tp    = entry + self.tp_atr_mult * a
-                else:
-                    entry = closes[i] - slip
-                    sl    = entry + self.sl_atr_mult * a
-                    tp    = entry - self.tp_atr_mult * a
-
-                position = {
-                    "side":        sig_val,
-                    "entry_price": entry,
-                    "entry_idx":   i,
-                    "sl":          sl,
-                    "tp":          tp,
-                }
-
-        # Cerrar posición que queda abierta al final del dataset
+        # Cerrar posición abierta al final del dataset
         if position is not None:
             trade    = self._close(position, closes[-1], "end", n - 1)
             capital *= (1 + trade["pnl_net"])
@@ -230,7 +258,7 @@ class Backtester:
         final_signal = self.strategy.generate_signal(self.data)
         return self._build_result(trades, equity, final_signal)
 
-    # ── Métricas finales ──────────────────────────────────────────────────
+    # ── Métricas finales ───────────────────────────────────────────────────
 
     def _build_result(self, trades, equity, final_signal):
         if not trades:
@@ -242,8 +270,7 @@ class Backtester:
                 "avg_win": 0.0, "avg_loss": 0.0,
                 "max_drawdown": 0.0, "sharpe": 0.0, "sortino": 0.0,
                 "calmar": 0.0, "ann_return": 0.0,
-                "equity_curve": equity,
-                "exit_breakdown": {},
+                "equity_curve": equity, "exit_breakdown": {},
                 "signal": final_signal,
             }
 
@@ -255,9 +282,10 @@ class Backtester:
         gross_loss   = abs(sum(t["pnl_net"] for t in losses))
         pf           = (gross_profit / gross_loss) if gross_loss > 0 \
                        else (float("inf") if gross_profit > 0 else 0.0)
+        # Suma aditiva — ver nota en docstring sobre diferencia con equity[-1]-1
         total_pnl    = sum(t["pnl_net"] for t in trades)
         expectancy   = total_pnl / len(trades)
-        avg_win      = gross_profit / len(wins)  if wins   else 0.0
+        avg_win      = gross_profit / len(wins)   if wins   else 0.0
         avg_loss     = gross_loss   / len(losses) if losses else 0.0
 
         exit_counts = {}
@@ -269,7 +297,7 @@ class Backtester:
 
         if self.verbose:
             print(
-                f"Backtest completado: {len(trades)} trades | "
+                f"Backtest: {len(trades)} trades | "
                 f"WR={winrate:.1%} | PF={pf:.2f} | "
                 f"net_pnl={total_pnl:.2%} | "
                 f"expectancy={expectancy:.3%} | "
@@ -279,22 +307,20 @@ class Backtester:
             )
 
         return {
-            # compatibilidad con código existente
-            "trades":        len(trades),
-            "winrate":       round(winrate, 4),
-            "profit_factor": round(pf, 4),
-            "total_pnl":     round(total_pnl, 6),
-            "signal":        final_signal,
-            # nuevas métricas
-            "expectancy":    round(expectancy, 6),
-            "avg_win":       round(avg_win, 6),
-            "avg_loss":      round(avg_loss, 6),
-            "max_drawdown":  rm["max_drawdown"],
-            "sharpe":        rm["sharpe"],
-            "sortino":       rm["sortino"],
-            "calmar":        rm["calmar"],
-            "ann_return":    rm["ann_return"],
-            "equity_curve":  equity,
+            "trades":         len(trades),
+            "winrate":        round(winrate, 4),
+            "profit_factor":  round(pf, 4),
+            "total_pnl":      round(total_pnl, 6),
+            "signal":         final_signal,
+            "expectancy":     round(expectancy, 6),
+            "avg_win":        round(avg_win, 6),
+            "avg_loss":       round(avg_loss, 6),
+            "max_drawdown":   rm["max_drawdown"],
+            "sharpe":         rm["sharpe"],
+            "sortino":        rm["sortino"],
+            "calmar":         rm["calmar"],
+            "ann_return":     rm["ann_return"],
+            "equity_curve":   equity,
             "exit_breakdown": exit_counts,
-            "trades_detail": trades,
+            "trades_detail":  trades,
         }
