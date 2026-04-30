@@ -1,102 +1,85 @@
 //@version=6
 indicator("S/R + Tendencias [Fuerza Visual]", shorttitle="SR+Trend", overlay=true, max_lines_count=500, max_labels_count=200)
 
-// ════════════════════════════════════════════════════════════════════════════
-// INPUTS
-// ════════════════════════════════════════════════════════════════════════════
-var string G_SR = "⬛  Soporte / Resistencia"
-var string G_TD = "⬛  Líneas de Tendencia"
+// ── INPUTS ────────────────────────────────────────────────────────────────────
+pivot_len   = input.int(10,   "Longitud Pivot",          group="S/R", minval=3, maxval=50)
+cluster_pct = input.float(0.30, "Tolerancia Cluster (%)", group="S/R", minval=0.05, maxval=3.0, step=0.05)
+max_sr      = input.int(15,   "Max niveles S/R",          group="S/R", minval=5, maxval=40)
+min_touches = input.int(2,    "Toques minimos",           group="S/R", minval=1, maxval=8)
+sr_extend   = input.int(50,   "Extension derecha",        group="S/R", minval=0, maxval=300)
+show_sr     = input.bool(true, "Mostrar S/R",             group="S/R")
+n_pivots    = input.int(6,    "Historial de pivots",      group="Tendencias", minval=3, maxval=12)
+trend_tol   = input.float(0.25, "Tolerancia linea (%)",   group="Tendencias", minval=0.05, maxval=2.0, step=0.05)
+show_trends = input.bool(true, "Mostrar Tendencias",      group="Tendencias")
 
-pivot_len   = input.int  (10,   "Longitud Pivot",             group=G_SR, minval=3,    maxval=50,   tooltip="Barras a cada lado para confirmar un swing high/low como pivot válido")
-cluster_pct = input.float(0.30, "Tolerancia Cluster (%)",     group=G_SR, minval=0.05, maxval=3.0,  step=0.05, tooltip="Radio % dentro del cual dos pivots se fusionan en el mismo nivel S/R")
-max_sr      = input.int  (15,   "Máx. niveles a mostrar",     group=G_SR, minval=5,    maxval=40)
-min_touches = input.int  (2,    "Toques mínimos",             group=G_SR, minval=1,    maxval=8,    tooltip="Niveles con menos toques que este valor se ocultan del gráfico")
-sr_extend   = input.int  (50,   "Extensión derecha (barras)", group=G_SR, minval=0,    maxval=300)
-show_sr     = input.bool (true, "Mostrar S/R",                group=G_SR)
-
-n_pivots    = input.int  (6,    "Historial de pivots",        group=G_TD, minval=3,    maxval=12,   tooltip="Número de pivots recientes usados para detectar la tendencia dominante")
-trend_tol   = input.float(0.25, "Tolerancia línea (%)",       group=G_TD, minval=0.05, maxval=2.0,  step=0.05, tooltip="Margen % para considerar que un pivot toca la línea de tendencia")
-show_trends = input.bool (true, "Mostrar Tendencias",         group=G_TD)
-
-// ════════════════════════════════════════════════════════════════════════════
-// COLOR Y GROSOR POR FUERZA
-// 1 toque → semitransparente … 6+ toques → casi sólido
-// ════════════════════════════════════════════════════════════════════════════
+// ── COLOR Y GROSOR ────────────────────────────────────────────────────────────
 f_sr_color(touches, is_resist) => is_resist ? color.new(#E53935, math.max(0, 65 - (touches - 1) * 12)) : color.new(#43A047, math.max(0, 65 - (touches - 1) * 12))
 f_td_color(touches, is_resist) => is_resist ? color.new(#F57C00, math.max(0, 65 - (touches - 1) * 12)) : color.new(#1565C0, math.max(0, 65 - (touches - 1) * 12))
 f_width(touches) => math.min(math.max(touches, 1), 4)
 
-// ════════════════════════════════════════════════════════════════════════════
-// DETECCIÓN DE PIVOTS
-// ════════════════════════════════════════════════════════════════════════════
+// ── DETECCION DE PIVOTS ───────────────────────────────────────────────────────
 ph = ta.pivothigh(high, pivot_len, pivot_len)
-pl = ta.pivotlow (low,  pivot_len, pivot_len)
+pl = ta.pivotlow(low, pivot_len, pivot_len)
 
-var float[] ph_prices = array.new_float()
-var int[]   ph_bars   = array.new_int()
-var float[] pl_prices = array.new_float()
-var int[]   pl_bars   = array.new_int()
+var array<float> ph_prices = array.new<float>()
+var array<int>   ph_bars   = array.new<int>()
+var array<float> pl_prices = array.new<float>()
+var array<int>   pl_bars   = array.new<int>()
 
 if not na(ph)
     array.push(ph_prices, ph)
-    array.push(ph_bars,   bar_index - pivot_len)
+    array.push(ph_bars, bar_index - pivot_len)
     if array.size(ph_prices) > n_pivots
         array.shift(ph_prices)
         array.shift(ph_bars)
 
 if not na(pl)
     array.push(pl_prices, pl)
-    array.push(pl_bars,   bar_index - pivot_len)
+    array.push(pl_bars, bar_index - pivot_len)
     if array.size(pl_prices) > n_pivots
         array.shift(pl_prices)
         array.shift(pl_bars)
 
-// ════════════════════════════════════════════════════════════════════════════
-// CLUSTERING DE NIVELES S/R
-// Nuevo pivot → se fusiona con el nivel más cercano dentro de cluster_pct %
-// (precio = media ponderada) o crea un nivel nuevo.
-// ════════════════════════════════════════════════════════════════════════════
-var float[] sr_price   = array.new_float()
-var int[]   sr_touches = array.new_int()
-var bool[]  sr_resist  = array.new_bool()
+// ── CLUSTERING S/R ────────────────────────────────────────────────────────────
+var array<float> sr_price   = array.new<float>()
+var array<int>   sr_touches = array.new<int>()
+var array<bool>  sr_resist  = array.new<bool>()
 
 if not na(ph)
     tol    = ph * cluster_pct / 100.0
     merged = false
     for i = 0 to array.size(sr_price) - 1
         if array.get(sr_resist, i) and math.abs(array.get(sr_price, i) - ph) <= tol
-            old_p = array.get(sr_price,   i)
+            old_p = array.get(sr_price, i)
             old_t = array.get(sr_touches, i)
-            array.set(sr_price,   i, (old_p * old_t + ph) / (old_t + 1))
+            array.set(sr_price, i, (old_p * old_t + ph) / (old_t + 1))
             array.set(sr_touches, i, old_t + 1)
             merged := true
             break
     if not merged
-        array.push(sr_price,   ph)
+        array.push(sr_price, ph)
         array.push(sr_touches, 1)
-        array.push(sr_resist,  true)
+        array.push(sr_resist, true)
 
 if not na(pl)
     tol    = pl * cluster_pct / 100.0
     merged = false
     for i = 0 to array.size(sr_price) - 1
         if not array.get(sr_resist, i) and math.abs(array.get(sr_price, i) - pl) <= tol
-            old_p = array.get(sr_price,   i)
+            old_p = array.get(sr_price, i)
             old_t = array.get(sr_touches, i)
-            array.set(sr_price,   i, (old_p * old_t + pl) / (old_t + 1))
+            array.set(sr_price, i, (old_p * old_t + pl) / (old_t + 1))
             array.set(sr_touches, i, old_t + 1)
             merged := true
             break
     if not merged
-        array.push(sr_price,   pl)
+        array.push(sr_price, pl)
         array.push(sr_touches, 1)
-        array.push(sr_resist,  false)
+        array.push(sr_resist, false)
 
-// ════════════════════════════════════════════════════════════════════════════
-// RENDER — sólo en la última barra
-// ════════════════════════════════════════════════════════════════════════════
-var line[]  all_lines  = array.new_line()
-var label[] all_labels = array.new_label()
+// ── RENDER ────────────────────────────────────────────────────────────────────
+var array<line>  all_lines  = array.new<line>()
+var array<label> all_labels = array.new<label>()
 
 if barstate.islast
     for ln in all_lines
@@ -106,11 +89,11 @@ if barstate.islast
     array.clear(all_lines)
     array.clear(all_labels)
 
-    // ── S/R HORIZONTALES ────────────────────────────────────────────────────
+    // S/R HORIZONTALES
     if show_sr
         n = array.size(sr_price)
         if n > 0
-            sorted = array.new_int(n)
+            sorted = array.new<int>(n)
             for i = 0 to n - 1
                 array.set(sorted, i, i)
             for i = 1 to n - 1
@@ -130,18 +113,18 @@ if barstate.islast
                     break
                 idx     = array.get(sorted, k)
                 touches = array.get(sr_touches, idx)
-                price   = array.get(sr_price,   idx)
-                resist  = array.get(sr_resist,  idx)
+                price   = array.get(sr_price, idx)
+                resist  = array.get(sr_resist, idx)
                 if touches < min_touches
                     break
-                col = f_sr_color(touches, resist)
-                lw  = f_width(touches)
-                lbl_text = resist ? "R ×" + str.tostring(touches) : "S ×" + str.tostring(touches)
+                col      = f_sr_color(touches, resist)
+                lw       = f_width(touches)
+                lbl_text = resist ? "R x" + str.tostring(touches) : "S x" + str.tostring(touches)
                 array.push(all_lines, line.new(bar_index - 200, price, bar_index + sr_extend, price, color=col, width=lw, style=line.style_solid))
                 array.push(all_labels, label.new(bar_index + sr_extend + 2, price, lbl_text, color=color.new(col, 50), textcolor=color.white, style=label.style_label_left, size=size.small))
                 drawn += 1
 
-    // ── TENDENCIA RESISTENCIA (pivot highs) ──────────────────────────────────
+    // TENDENCIA RESISTENCIA (pivot highs)
     if show_trends
         sz_h = array.size(ph_prices)
         if sz_h >= 2
@@ -178,9 +161,9 @@ if barstate.islast
                 col = f_td_color(bt_h, true)
                 lw  = f_width(bt_h)
                 array.push(all_lines, line.new(int(b0), p0, bar_index + sr_extend, pN, color=col, width=lw, style=line.style_dashed))
-                array.push(all_labels, label.new(bar_index + sr_extend + 2, pN, "TR ×" + str.tostring(bt_h), color=color.new(col, 50), textcolor=color.white, style=label.style_label_left, size=size.small))
+                array.push(all_labels, label.new(bar_index + sr_extend + 2, pN, "TR x" + str.tostring(bt_h), color=color.new(col, 50), textcolor=color.white, style=label.style_label_left, size=size.small))
 
-    // ── TENDENCIA SOPORTE (pivot lows) ───────────────────────────────────────
+    // TENDENCIA SOPORTE (pivot lows)
     if show_trends
         sz_l = array.size(pl_prices)
         if sz_l >= 2
@@ -217,4 +200,4 @@ if barstate.islast
                 col = f_td_color(bt_l, false)
                 lw  = f_width(bt_l)
                 array.push(all_lines, line.new(int(b0), p0, bar_index + sr_extend, pN, color=col, width=lw, style=line.style_dashed))
-                array.push(all_labels, label.new(bar_index + sr_extend + 2, pN, "TS ×" + str.tostring(bt_l), color=color.new(col, 50), textcolor=color.white, style=label.style_label_left, size=size.small))
+                array.push(all_labels, label.new(bar_index + sr_extend + 2, pN, "TS x" + str.tostring(bt_l), color=color.new(col, 50), textcolor=color.white, style=label.style_label_left, size=size.small))
