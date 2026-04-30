@@ -1,25 +1,22 @@
 //@version=6
-indicator("S/R + Tendencias [Fuerza Visual]", shorttitle="SR+Trend", overlay=true, max_lines_count=500, max_labels_count=200)
+indicator("Zonas de Rebote", shorttitle="Rebote", overlay=true, max_boxes_count=30, max_labels_count=10)
 
 // ── INPUTS ────────────────────────────────────────────────────────────────────
-pivot_len   = input.int(10,   "Longitud Pivot",          group="S/R", minval=3, maxval=50)
-cluster_pct = input.float(0.30, "Tolerancia Cluster (%)", group="S/R", minval=0.05, maxval=3.0, step=0.05)
-max_sr      = input.int(15,   "Max niveles S/R",          group="S/R", minval=5, maxval=40)
-min_touches = input.int(2,    "Toques minimos",           group="S/R", minval=1, maxval=8)
-sr_extend   = input.int(50,   "Extension derecha",        group="S/R", minval=0, maxval=300)
-show_sr     = input.bool(true, "Mostrar S/R",             group="S/R")
-n_pivots    = input.int(6,    "Historial de pivots",      group="Tendencias", minval=3, maxval=12)
-trend_tol   = input.float(0.25, "Tolerancia linea (%)",   group="Tendencias", minval=0.05, maxval=2.0, step=0.05)
-show_trends = input.bool(true, "Mostrar Tendencias",      group="Tendencias")
+pivot_len   = input.int(10,   "Longitud Pivot",        group="Config", minval=3, maxval=50)
+cluster_pct = input.float(0.40, "Amplitud de zona (%)", group="Config", minval=0.1, maxval=5.0, step=0.1)
+min_touches = input.int(2,    "Toques minimos",         group="Config", minval=1, maxval=8)
+max_zones   = input.int(6,    "Zonas a mostrar",        group="Config", minval=1, maxval=10)
+zone_extend = input.int(40,   "Extension derecha",      group="Config", minval=0, maxval=200)
+n_pivots    = input.int(6,    "Pivots tendencia",       group="Config", minval=3, maxval=12)
+trend_tol   = input.float(0.30, "Tolerancia tendencia (%)", group="Config", minval=0.05, maxval=2.0, step=0.05)
 
-// ── COLOR Y GROSOR ────────────────────────────────────────────────────────────
-f_sr_color(touches, is_resist) => is_resist ? color.new(#E53935, math.max(0, 65 - (touches - 1) * 12)) : color.new(#43A047, math.max(0, 65 - (touches - 1) * 12))
-f_td_color(touches, is_resist) => is_resist ? color.new(#F57C00, math.max(0, 65 - (touches - 1) * 12)) : color.new(#1565C0, math.max(0, 65 - (touches - 1) * 12))
-f_width(touches) => math.min(math.max(touches, 1), 4)
+// ── COLORES: rojo=resistencia  verde=soporte  intensidad=fuerza ───────────────
+f_bg(score, is_resist)  => is_resist ? color.new(#B71C1C, math.max(5,  65 - score * 9)) : color.new(#1B5E20, math.max(5,  65 - score * 9))
+f_brd(score, is_resist) => is_resist ? color.new(#FF1744, math.max(0,  40 - score * 7)) : color.new(#00E676, math.max(0,  40 - score * 7))
 
-// ── DETECCION DE PIVOTS ───────────────────────────────────────────────────────
+// ── PIVOTS ────────────────────────────────────────────────────────────────────
 ph = ta.pivothigh(high, pivot_len, pivot_len)
-pl = ta.pivotlow(low, pivot_len, pivot_len)
+pl = ta.pivotlow(low,  pivot_len, pivot_len)
 
 var array<float> ph_prices = array.new<float>()
 var array<int>   ph_bars   = array.new<int>()
@@ -82,126 +79,149 @@ if not na(pl)
         array.push(sr_resist, false)
 
 // ── RENDER ────────────────────────────────────────────────────────────────────
-var array<line>  all_lines  = array.new<line>()
+var array<box>   all_boxes  = array.new<box>()
 var array<label> all_labels = array.new<label>()
 
 if barstate.islast
-    for ln in all_lines
-        line.delete(ln)
+    for bx in all_boxes
+        box.delete(bx)
     for lb in all_labels
         label.delete(lb)
-    array.clear(all_lines)
+    array.clear(all_boxes)
     array.clear(all_labels)
 
-    // S/R HORIZONTALES
-    if show_sr
-        n = array.size(sr_price)
-        if n > 0
-            sorted = array.new<int>(n)
-            for i = 0 to n - 1
-                array.set(sorted, i, i)
+    // ── 1. Calcular precio actual de la mejor trendline de resistencia ────────
+    td_r_price   = float(na)
+    td_r_touches = 0
+    sz_h = array.size(ph_prices)
+    if sz_h >= 2
+        bt_h  = 0
+        bsl_h = 0.0
+        bic_h = 0.0
+        for i = 0 to sz_h - 2
+            p1 = array.get(ph_prices, i)
+            b1 = float(array.get(ph_bars, i))
+            for j = i + 1 to sz_h - 1
+                p2 = array.get(ph_prices, j)
+                b2 = float(array.get(ph_bars, j))
+                if b1 == b2
+                    continue
+                sl = (p2 - p1) / (b2 - b1)
+                ic = p1 - sl * b1
+                t  = 0
+                for k = 0 to sz_h - 1
+                    pk  = array.get(ph_prices, k)
+                    bk  = float(array.get(ph_bars, k))
+                    prj = sl * bk + ic
+                    if math.abs(pk - prj) <= prj * trend_tol / 100.0
+                        t += 1
+                if t > bt_h
+                    bt_h  := t
+                    bsl_h := sl
+                    bic_h := ic
+        if bt_h >= 2
+            td_r_price   := bsl_h * float(bar_index) + bic_h
+            td_r_touches := bt_h
+
+    // ── 2. Calcular precio actual de la mejor trendline de soporte ────────────
+    td_s_price   = float(na)
+    td_s_touches = 0
+    sz_l = array.size(pl_prices)
+    if sz_l >= 2
+        bt_l  = 0
+        bsl_l = 0.0
+        bic_l = 0.0
+        for i = 0 to sz_l - 2
+            p1 = array.get(pl_prices, i)
+            b1 = float(array.get(pl_bars, i))
+            for j = i + 1 to sz_l - 1
+                p2 = array.get(pl_prices, j)
+                b2 = float(array.get(pl_bars, j))
+                if b1 == b2
+                    continue
+                sl = (p2 - p1) / (b2 - b1)
+                ic = p1 - sl * b1
+                t  = 0
+                for k = 0 to sz_l - 1
+                    pk  = array.get(pl_prices, k)
+                    bk  = float(array.get(pl_bars, k))
+                    prj = sl * bk + ic
+                    if math.abs(pk - prj) <= prj * trend_tol / 100.0
+                        t += 1
+                if t > bt_l
+                    bt_l  := t
+                    bsl_l := sl
+                    bic_l := ic
+        if bt_l >= 2
+            td_s_price   := bsl_l * float(bar_index) + bic_l
+            td_s_touches := bt_l
+
+    // ── 3. Puntuar cada nivel S/R  ────────────────────────────────────────────
+    // Puntuacion = toques propios + toques de la tendencia si hay confluencia
+    n = array.size(sr_price)
+    if n > 0
+        scores = array.new<int>(n)
+        for i = 0 to n - 1
+            price   = array.get(sr_price, i)
+            touches = array.get(sr_touches, i)
+            score   = touches
+            tol_z   = price * cluster_pct * 1.5 / 100.0
+            if not na(td_r_price) and math.abs(price - td_r_price) <= tol_z
+                score += td_r_touches
+            if not na(td_s_price) and math.abs(price - td_s_price) <= tol_z
+                score += td_s_touches
+            array.set(scores, i, score)
+
+        // ── 4. Ordenar por puntuacion descendente ─────────────────────────────
+        sorted = array.new<int>(n)
+        for i = 0 to n - 1
+            array.set(sorted, i, i)
+        if n > 1
             for i = 1 to n - 1
                 ki = array.get(sorted, i)
-                kt = array.get(sr_touches, ki)
+                kt = array.get(scores, ki)
                 j  = i - 1
                 while j >= 0
-                    if array.get(sr_touches, array.get(sorted, j)) >= kt
+                    if array.get(scores, array.get(sorted, j)) >= kt
                         break
                     array.set(sorted, j + 1, array.get(sorted, j))
                     j -= 1
                 array.set(sorted, j + 1, ki)
 
-            drawn = 0
-            for k = 0 to n - 1
-                if drawn >= max_sr
-                    break
-                idx     = array.get(sorted, k)
-                touches = array.get(sr_touches, idx)
-                price   = array.get(sr_price, idx)
-                resist  = array.get(sr_resist, idx)
-                if touches < min_touches
-                    break
-                col      = f_sr_color(touches, resist)
-                lw       = f_width(touches)
-                lbl_text = resist ? "R x" + str.tostring(touches) : "S x" + str.tostring(touches)
-                array.push(all_lines, line.new(bar_index - 200, price, bar_index + sr_extend, price, color=col, width=lw, style=line.style_solid))
-                array.push(all_labels, label.new(bar_index + sr_extend + 2, price, lbl_text, color=color.new(col, 50), textcolor=color.white, style=label.style_label_left, size=size.small))
-                drawn += 1
+        // ── 5. Dibujar las mejores zonas como cajas ───────────────────────────
+        drawn = 0
+        for k = 0 to n - 1
+            if drawn >= max_zones
+                break
+            idx     = array.get(sorted, k)
+            touches = array.get(sr_touches, idx)
+            price   = array.get(sr_price, idx)
+            resist  = array.get(sr_resist, idx)
+            score   = array.get(scores, idx)
+            if touches < min_touches
+                break
 
-    // TENDENCIA RESISTENCIA (pivot highs)
-    if show_trends
-        sz_h = array.size(ph_prices)
-        if sz_h >= 2
-            bt_h  = 0
-            bsi_h = -1
-            bsl_h = 0.0
-            bic_h = 0.0
-            for i = 0 to sz_h - 2
-                p1 = array.get(ph_prices, i)
-                b1 = float(array.get(ph_bars, i))
-                for j = i + 1 to sz_h - 1
-                    p2 = array.get(ph_prices, j)
-                    b2 = float(array.get(ph_bars, j))
-                    if b1 == b2
-                        continue
-                    sl = (p2 - p1) / (b2 - b1)
-                    ic = p1 - sl * b1
-                    t  = 0
-                    for k = 0 to sz_h - 1
-                        pk  = array.get(ph_prices, k)
-                        bk  = float(array.get(ph_bars, k))
-                        prj = sl * bk + ic
-                        if math.abs(pk - prj) <= prj * trend_tol / 100.0
-                            t += 1
-                    if t > bt_h
-                        bt_h  := t
-                        bsi_h := i
-                        bsl_h := sl
-                        bic_h := ic
-            if bt_h >= 2 and bsi_h >= 0
-                b0  = float(array.get(ph_bars, 0))
-                p0  = bsl_h * b0 + bic_h
-                pN  = bsl_h * float(bar_index + sr_extend) + bic_h
-                col = f_td_color(bt_h, true)
-                lw  = f_width(bt_h)
-                array.push(all_lines, line.new(int(b0), p0, bar_index + sr_extend, pN, color=col, width=lw, style=line.style_dashed))
-                array.push(all_labels, label.new(bar_index + sr_extend + 2, pN, "TR x" + str.tostring(bt_h), color=color.new(col, 50), textcolor=color.white, style=label.style_label_left, size=size.small))
+            zone_h  = price * cluster_pct * 1.5 / 100.0
+            top_p   = price + zone_h
+            bot_p   = price - zone_h
 
-    // TENDENCIA SOPORTE (pivot lows)
-    if show_trends
-        sz_l = array.size(pl_prices)
-        if sz_l >= 2
-            bt_l  = 0
-            bsi_l = -1
-            bsl_l = 0.0
-            bic_l = 0.0
-            for i = 0 to sz_l - 2
-                p1 = array.get(pl_prices, i)
-                b1 = float(array.get(pl_bars, i))
-                for j = i + 1 to sz_l - 1
-                    p2 = array.get(pl_prices, j)
-                    b2 = float(array.get(pl_bars, j))
-                    if b1 == b2
-                        continue
-                    sl = (p2 - p1) / (b2 - b1)
-                    ic = p1 - sl * b1
-                    t  = 0
-                    for k = 0 to sz_l - 1
-                        pk  = array.get(pl_prices, k)
-                        bk  = float(array.get(pl_bars, k))
-                        prj = sl * bk + ic
-                        if math.abs(pk - prj) <= prj * trend_tol / 100.0
-                            t += 1
-                    if t > bt_l
-                        bt_l  := t
-                        bsi_l := i
-                        bsl_l := sl
-                        bic_l := ic
-            if bt_l >= 2 and bsi_l >= 0
-                b0  = float(array.get(pl_bars, 0))
-                p0  = bsl_l * b0 + bic_l
-                pN  = bsl_l * float(bar_index + sr_extend) + bic_l
-                col = f_td_color(bt_l, false)
-                lw  = f_width(bt_l)
-                array.push(all_lines, line.new(int(b0), p0, bar_index + sr_extend, pN, color=col, width=lw, style=line.style_dashed))
-                array.push(all_labels, label.new(bar_index + sr_extend + 2, pN, "TS x" + str.tostring(bt_l), color=color.new(col, 50), textcolor=color.white, style=label.style_label_left, size=size.small))
+            // Etiqueta de probabilidad
+            prob    = score >= 7 ? "ALTA" : score >= 4 ? "MEDIA" : "BAJA"
+            // Indicador de confluencia con tendencia
+            conf    = (not na(td_r_price) and math.abs(price - td_r_price) <= zone_h) or (not na(td_s_price) and math.abs(price - td_s_price) <= zone_h) ? " + TENDENCIA" : ""
+            lbl_txt = (resist ? "RESISTENCIA" : "SOPORTE") + " | " + prob + conf + "  (x" + str.tostring(touches) + ")"
+
+            bg_col  = f_bg(score, resist)
+            brd_col = f_brd(score, resist)
+
+            array.push(all_boxes,
+                box.new(bar_index - 120, top_p, bar_index + zone_extend, bot_p,
+                        border_color = brd_col,
+                        border_width = 2,
+                        bgcolor      = bg_col,
+                        text         = lbl_txt,
+                        text_color   = color.white,
+                        text_size    = size.small,
+                        text_halign  = text.align_right,
+                        text_valign  = text.align_center))
+            drawn += 1
