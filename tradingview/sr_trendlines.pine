@@ -48,14 +48,16 @@ var array<bool>  sr_resist  = array.new<bool>()
 if not na(ph)
     tol    = ph * cluster_pct / 100.0
     merged = false
-    for i = 0 to array.size(sr_price) - 1
-        if array.get(sr_resist, i) and math.abs(array.get(sr_price, i) - ph) <= tol
-            old_p = array.get(sr_price, i)
-            old_t = array.get(sr_touches, i)
-            array.set(sr_price, i, (old_p * old_t + ph) / (old_t + 1))
-            array.set(sr_touches, i, old_t + 1)
-            merged := true
-            break
+    n_sr   = array.size(sr_price)
+    if n_sr > 0
+        for i = 0 to n_sr - 1
+            if array.get(sr_resist, i) and math.abs(array.get(sr_price, i) - ph) <= tol
+                old_p = array.get(sr_price, i)
+                old_t = array.get(sr_touches, i)
+                array.set(sr_price, i, (old_p * old_t + ph) / (old_t + 1))
+                array.set(sr_touches, i, old_t + 1)
+                merged := true
+                break
     if not merged
         array.push(sr_price, ph)
         array.push(sr_touches, 1)
@@ -64,14 +66,16 @@ if not na(ph)
 if not na(pl)
     tol    = pl * cluster_pct / 100.0
     merged = false
-    for i = 0 to array.size(sr_price) - 1
-        if not array.get(sr_resist, i) and math.abs(array.get(sr_price, i) - pl) <= tol
-            old_p = array.get(sr_price, i)
-            old_t = array.get(sr_touches, i)
-            array.set(sr_price, i, (old_p * old_t + pl) / (old_t + 1))
-            array.set(sr_touches, i, old_t + 1)
-            merged := true
-            break
+    n_sr   = array.size(sr_price)
+    if n_sr > 0
+        for i = 0 to n_sr - 1
+            if not array.get(sr_resist, i) and math.abs(array.get(sr_price, i) - pl) <= tol
+                old_p = array.get(sr_price, i)
+                old_t = array.get(sr_touches, i)
+                array.set(sr_price, i, (old_p * old_t + pl) / (old_t + 1))
+                array.set(sr_touches, i, old_t + 1)
+                merged := true
+                break
     if not merged
         array.push(sr_price, pl)
         array.push(sr_touches, 1)
