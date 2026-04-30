@@ -22,22 +22,9 @@ show_trends = input.bool (true, "Mostrar Tendencias",         group=G_TD)
 // COLOR Y GROSOR POR FUERZA
 // 1 toque → semitransparente … 6+ toques → casi sólido
 // ════════════════════════════════════════════════════════════════════════════
-f_sr_color(touches, is_resist) =>
-    alpha = math.max(0, 65 - (touches - 1) * 12)
-    if is_resist
-        color.new(#E53935, alpha)
-    else
-        color.new(#43A047, alpha)
-
-f_td_color(touches, is_resist) =>
-    alpha = math.max(0, 65 - (touches - 1) * 12)
-    if is_resist
-        color.new(#F57C00, alpha)
-    else
-        color.new(#1565C0, alpha)
-
-f_width(touches) =>
-    math.min(math.max(touches, 1), 4)
+f_sr_color(touches, is_resist) => is_resist ? color.new(#E53935, math.max(0, 65 - (touches - 1) * 12)) : color.new(#43A047, math.max(0, 65 - (touches - 1) * 12))
+f_td_color(touches, is_resist) => is_resist ? color.new(#F57C00, math.max(0, 65 - (touches - 1) * 12)) : color.new(#1565C0, math.max(0, 65 - (touches - 1) * 12))
+f_width(touches) => math.min(math.max(touches, 1), 4)
 
 // ════════════════════════════════════════════════════════════════════════════
 // DETECCIÓN DE PIVOTS
