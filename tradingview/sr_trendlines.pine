@@ -24,11 +24,17 @@ show_trends = input.bool (true, "Mostrar Tendencias",         group=G_TD)
 // ════════════════════════════════════════════════════════════════════════════
 f_sr_color(touches, is_resist) =>
     alpha = math.max(0, 65 - (touches - 1) * 12)
-    is_resist ? color.new(#E53935, alpha) : color.new(#43A047, alpha)
+    if is_resist
+        color.new(#E53935, alpha)
+    else
+        color.new(#43A047, alpha)
 
 f_td_color(touches, is_resist) =>
     alpha = math.max(0, 65 - (touches - 1) * 12)
-    is_resist ? color.new(#F57C00, alpha) : color.new(#1565C0, alpha)
+    if is_resist
+        color.new(#F57C00, alpha)
+    else
+        color.new(#1565C0, alpha)
 
 f_width(touches) =>
     math.min(math.max(touches, 1), 4)
@@ -143,8 +149,9 @@ if barstate.islast
                     break
                 col = f_sr_color(touches, resist)
                 lw  = f_width(touches)
+                lbl_text = resist ? "R ×" + str.tostring(touches) : "S ×" + str.tostring(touches)
                 array.push(all_lines, line.new(bar_index - 200, price, bar_index + sr_extend, price, color=col, width=lw, style=line.style_solid))
-                array.push(all_labels, label.new(bar_index + sr_extend + 2, price, (resist ? "R" : "S") + " ×" + str.tostring(touches), color=color.new(col, 50), textcolor=color.white, style=label.style_label_left, size=size.small))
+                array.push(all_labels, label.new(bar_index + sr_extend + 2, price, lbl_text, color=color.new(col, 50), textcolor=color.white, style=label.style_label_left, size=size.small))
                 drawn += 1
 
     // ── TENDENCIA RESISTENCIA (pivot highs) ──────────────────────────────────
