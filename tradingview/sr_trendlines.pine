@@ -6,12 +6,12 @@ pivot_len   = input.int(10,   "Longitud Pivot",        group="Config", minval=3,
 cluster_pct = input.float(0.20, "Amplitud de zona (%)", group="Config", minval=0.1, maxval=5.0, step=0.1)
 min_touches = input.int(2,    "Toques minimos",         group="Config", minval=1, maxval=8)
 max_zones   = input.int(6,    "Zonas a mostrar",        group="Config", minval=1, maxval=10)
-zone_extend = input.int(40,   "Extension derecha",      group="Config", minval=0, maxval=200)
+zone_extend = input.int(50,   "Extension derecha",      group="Config", minval=10, maxval=200)
 n_pivots    = input.int(6,    "Pivots tendencia",       group="Config", minval=3, maxval=12)
 trend_tol   = input.float(0.30, "Tolerancia tendencia (%)", group="Config", minval=0.05, maxval=2.0, step=0.05)
 sl_mult     = input.float(1.5, "Buffer SL (x zona)",    group="Config", minval=0.5, maxval=5.0, step=0.1)
 
-// ── COLORES: rojo=resistencia  verde=soporte  intensidad=fuerza ───────────────
+// ── COLORES: intensidad segun puntuacion ──────────────────────────────────────
 f_bg(score, is_resist)  => is_resist ? color.new(#B71C1C, math.max(5,  65 - score * 9)) : color.new(#1B5E20, math.max(5,  65 - score * 9))
 f_brd(score, is_resist) => is_resist ? color.new(#FF1744, math.max(0,  40 - score * 7)) : color.new(#00E676, math.max(0,  40 - score * 7))
 
@@ -79,10 +79,17 @@ if not na(pl)
         array.push(sr_touches, 1)
         array.push(sr_resist, false)
 
+// ── PENDIENTES DE TENDENCIA (para direccion del mercado) ──────────────────────
+var float slope_h = 0.0
+var float slope_l = 0.0
+var bool  valid_h = false
+var bool  valid_l = false
+
 // ── RENDER ────────────────────────────────────────────────────────────────────
 var array<box>   all_boxes  = array.new<box>()
 var array<label> all_labels = array.new<label>()
 var array<line>  all_lines  = array.new<line>()
+var table        info_tbl   = na
 
 if barstate.islast
     for bx in all_boxes
@@ -94,6 +101,9 @@ if barstate.islast
     array.clear(all_boxes)
     array.clear(all_labels)
     array.clear(all_lines)
+
+    valid_h := false
+    valid_l := false
 
     // ── 1. Trendline resistencia ──────────────────────────────────────────────
     td_r_price   = float(na)
@@ -127,6 +137,8 @@ if barstate.islast
         if bt_h >= 2
             td_r_price   := bsl_h * float(bar_index) + bic_h
             td_r_touches := bt_h
+            slope_h      := bsl_h
+            valid_h      := true
 
     // ── 2. Trendline soporte ──────────────────────────────────────────────────
     td_s_price   = float(na)
@@ -160,8 +172,15 @@ if barstate.islast
         if bt_l >= 2
             td_s_price   := bsl_l * float(bar_index) + bic_l
             td_s_touches := bt_l
+            slope_l      := bsl_l
+            valid_l      := true
 
     // ── 3. Puntuar S/R ────────────────────────────────────────────────────────
+    long_score_v  = 0
+    short_score_v = 0
+    best_rr_long  = 0.0
+    best_rr_short = 0.0
+
     n = array.size(sr_price)
     if n > 0
         scores = array.new<int>(n)
@@ -176,7 +195,7 @@ if barstate.islast
                 score += td_s_touches
             array.set(scores, i, score)
 
-        // ── 4. Ordenar por puntuacion ─────────────────────────────────────────
+        // ── 4. Ordenar ────────────────────────────────────────────────────────
         sorted = array.new<int>(n)
         for i = 0 to n - 1
             array.set(sorted, i, i)
@@ -192,7 +211,7 @@ if barstate.islast
                     j -= 1
                 array.set(sorted, j + 1, ki)
 
-        // ── 5. Zonas S/R — borde mas grueso cuanto mayor puntuacion ──────────
+        // ── 5. Zonas S/R solo en la zona historica (izquierda) ────────────────
         drawn = 0
         for k = 0 to n - 1
             if drawn >= max_zones
@@ -209,13 +228,12 @@ if barstate.islast
             top_p   = price + zone_h
             bot_p   = price - zone_h
             brd_w   = score >= 7 ? 3 : score >= 4 ? 2 : 1
-
             prob    = score >= 7 ? "ALTA" : score >= 4 ? "MEDIA" : "BAJA"
-            conf    = (not na(td_r_price) and math.abs(price - td_r_price) <= zone_h) or (not na(td_s_price) and math.abs(price - td_s_price) <= zone_h) ? " + TENDENCIA" : ""
-            lbl_txt = (resist ? "RESISTENCIA" : "SOPORTE") + " | " + prob + conf + "  (x" + str.tostring(touches) + ")"
+            conf    = (not na(td_r_price) and math.abs(price - td_r_price) <= zone_h) or (not na(td_s_price) and math.abs(price - td_s_price) <= zone_h) ? " +T" : ""
+            lbl_txt = (resist ? "R" : "S") + "  " + prob + conf + "  x" + str.tostring(touches)
 
             array.push(all_boxes,
-                box.new(bar_index - 120, top_p, bar_index + zone_extend, bot_p,
+                box.new(bar_index - 120, top_p, bar_index, bot_p,
                         border_color = f_brd(score, resist),
                         border_width = brd_w,
                         bgcolor      = f_bg(score, resist),
@@ -228,8 +246,7 @@ if barstate.islast
 
         // ── 6. Setup LARGO ────────────────────────────────────────────────────
         cur_close = close
-        l_right   = bar_index + zone_extend
-        l_left    = bar_index - 30
+        rr        = bar_index + zone_extend
 
         long_idx  = -1
         long_dist = float(na)
@@ -250,8 +267,8 @@ if barstate.islast
             l_entry = lp + lzone_h
             l_sl    = lp - lzone_h * sl_mult
             l_risk  = l_entry - l_sl
+            long_score_v := array.get(scores, long_idx)
 
-            // TPs: resistencias por encima de la entrada
             l_tp_prices = array.new<float>()
             for k = 0 to n - 1
                 idx     = array.get(sorted, k)
@@ -263,60 +280,53 @@ if barstate.islast
             array.sort(l_tp_prices, order.ascending)
             n_l_tps  = array.size(l_tp_prices)
             l_tp_cnt = math.min(n_l_tps, 3)
+            best_rr_long := n_l_tps > 0 and l_risk > 0 ? (array.get(l_tp_prices, l_tp_cnt - 1) - l_entry) / l_risk : 0.0
 
-            // Mejor R:R para la flecha de entrada
-            l_max_rr = n_l_tps > 0 and l_risk > 0 ? (array.get(l_tp_prices, l_tp_cnt - 1) - l_entry) / l_risk : 0.0
-            l_rr_lbl = l_max_rr > 0 ? "\nmax " + str.tostring(math.round(l_max_rr * 10) / 10.0) + "R" : ""
+            // Bloque de riesgo (SL -> entrada)
+            array.push(all_boxes, box.new(bar_index, l_entry, rr, l_sl,
+                bgcolor=color.new(#FF1744, 92), border_color=color.new(#FF1744, 72), border_width=1))
 
-            // Bloque de riesgo (SL -> entrada), rojo translucido
-            array.push(all_boxes, box.new(bar_index + 1, l_entry, l_right, l_sl,
-                bgcolor=color.new(#FF1744, 88), border_color=color.new(#FF1744, 60), border_width=1))
-
-            // Bloques de recompensa apilados (entrada -> TP1 -> TP2 -> TP3)
+            // Bloques de recompensa apilados
             prev_l = l_entry
             if n_l_tps > 0
                 for t = 0 to l_tp_cnt - 1
-                    tp_p    = array.get(l_tp_prices, t)
-                    b_alpha = t == 0 ? 82 : t == 1 ? 87 : 91
-                    array.push(all_boxes, box.new(bar_index + 1, tp_p, l_right, prev_l,
-                        bgcolor=color.new(#00C853, b_alpha), border_color=color.new(#00C853, 60), border_width=1))
+                    tp_p = array.get(l_tp_prices, t)
+                    b_a  = t == 0 ? 86 : t == 1 ? 90 : 93
+                    array.push(all_boxes, box.new(bar_index, tp_p, rr, prev_l,
+                        bgcolor=color.new(#00C853, b_a), border_color=color.new(#00C853, 70), border_width=1))
                     prev_l := tp_p
 
-            // Linea de entrada + flecha hacia arriba
-            array.push(all_lines, line.new(l_left, l_entry, l_right, l_entry,
+            // Entrada: linea + flecha con max RR
+            l_rr_lbl = best_rr_long > 0 ? "\nmax " + str.tostring(math.round(best_rr_long * 10) / 10.0) + "R" : ""
+            array.push(all_lines, line.new(bar_index, l_entry, rr, l_entry,
                 color=color.new(#FFEB3B, 0), width=3, style=line.style_dashed))
-            array.push(all_labels, label.new(bar_index, l_entry,
-                "▲ LARGO" + l_rr_lbl,
+            array.push(all_labels, label.new(bar_index, l_entry, "▲ LARGO" + l_rr_lbl,
                 color=color.new(#FFEB3B, 5), textcolor=color.black,
                 size=size.normal, style=label.style_arrowup))
 
-            // Linea SL
-            array.push(all_lines, line.new(l_left, l_sl, l_right, l_sl,
+            // SL
+            array.push(all_lines, line.new(bar_index, l_sl, rr, l_sl,
                 color=color.new(#FF1744, 0), width=2, style=line.style_solid))
-            array.push(all_labels, label.new(l_right, l_sl, "SL",
+            array.push(all_labels, label.new(rr, l_sl, "SL",
                 color=color.new(#FF1744, 10), textcolor=color.white,
                 size=size.small, style=label.style_label_left))
 
-            // Lineas TP
+            // TPs
             if n_l_tps > 0
                 for t = 0 to l_tp_cnt - 1
-                    tp_price = array.get(l_tp_prices, t)
-                    rr       = l_risk > 0 ? (tp_price - l_entry) / l_risk : 0.0
-                    rr_txt   = str.tostring(math.round(rr * 10) / 10.0)
-                    tp_alpha = t == 0 ? 0 : t == 1 ? 25 : 50
-                    tp_w     = t == 0 ? 2 : 1
-                    tp_col   = color.new(#00C853, tp_alpha)
-                    array.push(all_lines, line.new(l_left, tp_price, l_right, tp_price,
-                        color=tp_col, width=tp_w, style=line.style_dashed))
-                    array.push(all_labels, label.new(l_right, tp_price,
+                    tp_p    = array.get(l_tp_prices, t)
+                    rr_val  = l_risk > 0 ? (tp_p - l_entry) / l_risk : 0.0
+                    rr_txt  = str.tostring(math.round(rr_val * 10) / 10.0)
+                    t_alpha = t == 0 ? 0 : t == 1 ? 25 : 50
+                    t_col   = color.new(#00C853, t_alpha)
+                    array.push(all_lines, line.new(bar_index, tp_p, rr, tp_p,
+                        color=t_col, width=t == 0 ? 2 : 1, style=line.style_dashed))
+                    array.push(all_labels, label.new(rr, tp_p,
                         "TP" + str.tostring(t + 1) + "  " + rr_txt + "R",
-                        color=tp_col, textcolor=color.white,
+                        color=t_col, textcolor=color.white,
                         size=size.small, style=label.style_label_left))
 
         // ── 7. Setup CORTO ────────────────────────────────────────────────────
-        s_right   = bar_index + zone_extend
-        s_left    = bar_index - 30
-
         short_idx  = -1
         short_dist = float(na)
         for k = 0 to n - 1
@@ -336,8 +346,8 @@ if barstate.islast
             s_entry = sp - szone_h
             s_sl    = sp + szone_h * sl_mult
             s_risk  = s_sl - s_entry
+            short_score_v := array.get(scores, short_idx)
 
-            // TPs: soportes por debajo de la entrada
             s_tp_prices = array.new<float>()
             for k = 0 to n - 1
                 idx     = array.get(sorted, k)
@@ -349,52 +359,106 @@ if barstate.islast
             array.sort(s_tp_prices, order.descending)
             n_s_tps  = array.size(s_tp_prices)
             s_tp_cnt = math.min(n_s_tps, 3)
+            best_rr_short := n_s_tps > 0 and s_risk > 0 ? (s_entry - array.get(s_tp_prices, s_tp_cnt - 1)) / s_risk : 0.0
 
-            // Mejor R:R para la flecha
-            s_max_rr = n_s_tps > 0 and s_risk > 0 ? (s_entry - array.get(s_tp_prices, s_tp_cnt - 1)) / s_risk : 0.0
-            s_rr_lbl = s_max_rr > 0 ? "\nmax " + str.tostring(math.round(s_max_rr * 10) / 10.0) + "R" : ""
+            // Bloque de riesgo (entrada -> SL)
+            array.push(all_boxes, box.new(bar_index, s_sl, rr, s_entry,
+                bgcolor=color.new(#FF1744, 92), border_color=color.new(#FF1744, 72), border_width=1))
 
-            // Bloque de riesgo (entrada -> SL), rojo translucido
-            array.push(all_boxes, box.new(bar_index + 1, s_sl, s_right, s_entry,
-                bgcolor=color.new(#FF1744, 88), border_color=color.new(#FF1744, 60), border_width=1))
-
-            // Bloques de recompensa apilados (entrada -> TP1 -> TP2 -> TP3)
+            // Bloques de recompensa apilados
             prev_s = s_entry
             if n_s_tps > 0
                 for t = 0 to s_tp_cnt - 1
-                    tp_p    = array.get(s_tp_prices, t)
-                    b_alpha = t == 0 ? 82 : t == 1 ? 87 : 91
-                    array.push(all_boxes, box.new(bar_index + 1, prev_s, s_right, tp_p,
-                        bgcolor=color.new(#00E5FF, b_alpha), border_color=color.new(#00E5FF, 60), border_width=1))
+                    tp_p = array.get(s_tp_prices, t)
+                    b_a  = t == 0 ? 86 : t == 1 ? 90 : 93
+                    array.push(all_boxes, box.new(bar_index, prev_s, rr, tp_p,
+                        bgcolor=color.new(#00E5FF, b_a), border_color=color.new(#00E5FF, 70), border_width=1))
                     prev_s := tp_p
 
-            // Linea de entrada + flecha hacia abajo
-            array.push(all_lines, line.new(s_left, s_entry, s_right, s_entry,
+            // Entrada: linea + flecha con max RR
+            s_rr_lbl = best_rr_short > 0 ? "\nmax " + str.tostring(math.round(best_rr_short * 10) / 10.0) + "R" : ""
+            array.push(all_lines, line.new(bar_index, s_entry, rr, s_entry,
                 color=color.new(#FFD600, 0), width=3, style=line.style_dashed))
-            array.push(all_labels, label.new(bar_index, s_entry,
-                "▼ CORTO" + s_rr_lbl,
+            array.push(all_labels, label.new(bar_index, s_entry, "▼ CORTO" + s_rr_lbl,
                 color=color.new(#FFD600, 5), textcolor=color.black,
                 size=size.normal, style=label.style_arrowdown))
 
-            // Linea SL
-            array.push(all_lines, line.new(s_left, s_sl, s_right, s_sl,
+            // SL
+            array.push(all_lines, line.new(bar_index, s_sl, rr, s_sl,
                 color=color.new(#FF1744, 0), width=2, style=line.style_solid))
-            array.push(all_labels, label.new(s_right, s_sl, "SL",
+            array.push(all_labels, label.new(rr, s_sl, "SL",
                 color=color.new(#FF1744, 10), textcolor=color.white,
                 size=size.small, style=label.style_label_left))
 
-            // Lineas TP
+            // TPs
             if n_s_tps > 0
                 for t = 0 to s_tp_cnt - 1
-                    tp_price = array.get(s_tp_prices, t)
-                    rr       = s_risk > 0 ? (s_entry - tp_price) / s_risk : 0.0
-                    rr_txt   = str.tostring(math.round(rr * 10) / 10.0)
-                    tp_alpha = t == 0 ? 0 : t == 1 ? 25 : 50
-                    tp_w     = t == 0 ? 2 : 1
-                    tp_col   = color.new(#00E5FF, tp_alpha)
-                    array.push(all_lines, line.new(s_left, tp_price, s_right, tp_price,
-                        color=tp_col, width=tp_w, style=line.style_dashed))
-                    array.push(all_labels, label.new(s_right, tp_price,
+                    tp_p    = array.get(s_tp_prices, t)
+                    rr_val  = s_risk > 0 ? (s_entry - tp_p) / s_risk : 0.0
+                    rr_txt  = str.tostring(math.round(rr_val * 10) / 10.0)
+                    t_alpha = t == 0 ? 0 : t == 1 ? 25 : 50
+                    t_col   = color.new(#00E5FF, t_alpha)
+                    array.push(all_lines, line.new(bar_index, tp_p, rr, tp_p,
+                        color=t_col, width=t == 0 ? 2 : 1, style=line.style_dashed))
+                    array.push(all_labels, label.new(rr, tp_p,
                         "TP" + str.tostring(t + 1) + "  " + rr_txt + "R",
-                        color=tp_col, textcolor=color.white,
+                        color=t_col, textcolor=color.white,
                         size=size.small, style=label.style_label_left))
+
+    // ── 8. Tabla info (esquina superior derecha) ──────────────────────────────
+    // Direccion: pendiente de la trendline de soporte (mas fiable)
+    trend_dir = "LATERAL  ↔"
+    dir_col   = color.new(#9E9E9E, 0)
+    if valid_l
+        if slope_l > 0
+            trend_dir := "ALCISTA  ↑"
+            dir_col   := color.new(#00E676, 0)
+        else
+            trend_dir := "BAJISTA  ↓"
+            dir_col   := color.new(#FF1744, 0)
+    else if valid_h
+        if slope_h > 0
+            trend_dir := "ALCISTA  ↑"
+            dir_col   := color.new(#00E676, 0)
+        else
+            trend_dir := "BAJISTA  ↓"
+            dir_col   := color.new(#FF1744, 0)
+
+    // Probabilidades basadas en puntuacion del nivel mas cercano
+    total_sv  = long_score_v + short_score_v
+    long_pct  = total_sv > 0 ? math.round(long_score_v  * 100.0 / total_sv) : 50
+    short_pct = 100 - long_pct
+
+    best_rr_all = math.max(best_rr_long, best_rr_short)
+    rr_str      = best_rr_all > 0 ? str.tostring(math.round(best_rr_all * 10) / 10.0) + "R" : "—"
+
+    // Crear tabla una sola vez, actualizar celdas en cada tick
+    if na(info_tbl)
+        info_tbl := table.new(position.top_right, 2, 4,
+            bgcolor      = color.new(#0D1117, 15),
+            border_color = color.new(color.white, 65),
+            border_width = 1,
+            frame_color  = color.new(color.white, 45),
+            frame_width  = 2)
+
+    table.cell(info_tbl, 0, 0, "DIRECCIÓN",
+        bgcolor=color.new(#0D1117, 35), text_color=color.new(color.white, 35), text_size=size.small)
+    table.cell(info_tbl, 1, 0, trend_dir,
+        bgcolor=color.new(#0D1117, 20), text_color=dir_col, text_size=size.small)
+
+    table.cell(info_tbl, 0, 1, "▲  LARGO",
+        bgcolor=color.new(#1B5E20, 55), text_color=color.new(#00E676, 0), text_size=size.small)
+    table.cell(info_tbl, 1, 1, str.tostring(long_pct) + "%",
+        bgcolor=color.new(#1B5E20, long_pct >= 60 ? 30 : 65),
+        text_color=color.new(#00E676, 0), text_size=size.small)
+
+    table.cell(info_tbl, 0, 2, "▼  CORTO",
+        bgcolor=color.new(#B71C1C, 55), text_color=color.new(#FF1744, 0), text_size=size.small)
+    table.cell(info_tbl, 1, 2, str.tostring(short_pct) + "%",
+        bgcolor=color.new(#B71C1C, short_pct >= 60 ? 30 : 65),
+        text_color=color.new(#FF1744, 0), text_size=size.small)
+
+    table.cell(info_tbl, 0, 3, "MEJOR RR",
+        bgcolor=color.new(#0D1117, 50), text_color=color.new(color.white, 40), text_size=size.small)
+    table.cell(info_tbl, 1, 3, rr_str,
+        bgcolor=color.new(#0D1117, 40), text_color=color.white, text_size=size.small)
