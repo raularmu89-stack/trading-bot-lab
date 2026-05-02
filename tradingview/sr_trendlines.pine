@@ -3,7 +3,7 @@ indicator("Zonas de Rebote", shorttitle="Rebote", overlay=true, max_boxes_count=
 
 // ── INPUTS ────────────────────────────────────────────────────────────────────
 pivot_len   = input.int(10,   "Longitud Pivot",        group="Config", minval=3, maxval=50)
-cluster_pct = input.float(0.40, "Amplitud de zona (%)", group="Config", minval=0.1, maxval=5.0, step=0.1)
+cluster_pct = input.float(0.20, "Amplitud de zona (%)", group="Config", minval=0.1, maxval=5.0, step=0.1)
 min_touches = input.int(2,    "Toques minimos",         group="Config", minval=1, maxval=8)
 max_zones   = input.int(6,    "Zonas a mostrar",        group="Config", minval=1, maxval=10)
 zone_extend = input.int(40,   "Extension derecha",      group="Config", minval=0, maxval=200)
@@ -201,7 +201,7 @@ if barstate.islast
             if touches < min_touches
                 break
 
-            zone_h  = price * cluster_pct * 1.5 / 100.0
+            zone_h  = price * cluster_pct * 0.7 / 100.0
             top_p   = price + zone_h
             bot_p   = price - zone_h
 
