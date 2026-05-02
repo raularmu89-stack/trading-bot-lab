@@ -1,5 +1,5 @@
 //@version=6
-indicator("Zonas de Rebote", shorttitle="Rebote", overlay=true, max_boxes_count=30, max_labels_count=10)
+indicator("Zonas de Rebote", shorttitle="Rebote", overlay=true, max_boxes_count=30, max_labels_count=40, max_lines_count=20)
 
 // ── INPUTS ────────────────────────────────────────────────────────────────────
 pivot_len   = input.int(10,   "Longitud Pivot",        group="Config", minval=3, maxval=50)
@@ -9,6 +9,7 @@ max_zones   = input.int(6,    "Zonas a mostrar",        group="Config", minval=1
 zone_extend = input.int(40,   "Extension derecha",      group="Config", minval=0, maxval=200)
 n_pivots    = input.int(6,    "Pivots tendencia",       group="Config", minval=3, maxval=12)
 trend_tol   = input.float(0.30, "Tolerancia tendencia (%)", group="Config", minval=0.05, maxval=2.0, step=0.05)
+sl_mult     = input.float(1.5, "Buffer SL (x zona)",    group="Config", minval=0.5, maxval=5.0, step=0.1)
 
 // ── COLORES: rojo=resistencia  verde=soporte  intensidad=fuerza ───────────────
 f_bg(score, is_resist)  => is_resist ? color.new(#B71C1C, math.max(5,  65 - score * 9)) : color.new(#1B5E20, math.max(5,  65 - score * 9))
@@ -81,14 +82,18 @@ if not na(pl)
 // ── RENDER ────────────────────────────────────────────────────────────────────
 var array<box>   all_boxes  = array.new<box>()
 var array<label> all_labels = array.new<label>()
+var array<line>  all_lines  = array.new<line>()
 
 if barstate.islast
     for bx in all_boxes
         box.delete(bx)
     for lb in all_labels
         label.delete(lb)
+    for ln in all_lines
+        line.delete(ln)
     array.clear(all_boxes)
     array.clear(all_labels)
+    array.clear(all_lines)
 
     // ── 1. Calcular precio actual de la mejor trendline de resistencia ────────
     td_r_price   = float(na)
@@ -157,7 +162,6 @@ if barstate.islast
             td_s_touches := bt_l
 
     // ── 3. Puntuar cada nivel S/R  ────────────────────────────────────────────
-    // Puntuacion = toques propios + toques de la tendencia si hay confluencia
     n = array.size(sr_price)
     if n > 0
         scores = array.new<int>(n)
@@ -205,9 +209,7 @@ if barstate.islast
             top_p   = price + zone_h
             bot_p   = price - zone_h
 
-            // Etiqueta de probabilidad
             prob    = score >= 7 ? "ALTA" : score >= 4 ? "MEDIA" : "BAJA"
-            // Indicador de confluencia con tendencia
             conf    = (not na(td_r_price) and math.abs(price - td_r_price) <= zone_h) or (not na(td_s_price) and math.abs(price - td_s_price) <= zone_h) ? " + TENDENCIA" : ""
             lbl_txt = (resist ? "RESISTENCIA" : "SOPORTE") + " | " + prob + conf + "  (x" + str.tostring(touches) + ")"
 
@@ -225,3 +227,116 @@ if barstate.islast
                         text_halign  = text.align_right,
                         text_valign  = text.align_center))
             drawn += 1
+
+        // ── 6. Setup LARGO: soporte mas cercano por debajo del precio ─────────
+        cur_close = close
+        l_right   = bar_index + zone_extend
+
+        long_idx  = -1
+        long_dist = float(na)
+        for k = 0 to n - 1
+            idx     = array.get(sorted, k)
+            price   = array.get(sr_price, idx)
+            resist  = array.get(sr_resist, idx)
+            touches = array.get(sr_touches, idx)
+            if not resist and price < cur_close and touches >= min_touches
+                dist = cur_close - price
+                if na(long_dist) or dist < long_dist
+                    long_dist := dist
+                    long_idx  := idx
+
+        if long_idx >= 0
+            lp      = array.get(sr_price, long_idx)
+            lzone_h = lp * cluster_pct * 0.7 / 100.0
+            l_entry = lp + lzone_h
+            l_sl    = lp - lzone_h * sl_mult
+            l_risk  = l_entry - l_sl
+
+            // Buscar TPs: resistencias por encima de la entrada
+            l_tp_prices = array.new<float>()
+            for k = 0 to n - 1
+                idx     = array.get(sorted, k)
+                price   = array.get(sr_price, idx)
+                resist  = array.get(sr_resist, idx)
+                touches = array.get(sr_touches, idx)
+                if resist and price > l_entry and touches >= min_touches
+                    array.push(l_tp_prices, price)
+            array.sort(l_tp_prices, order.ascending)
+
+            // Linea entrada LARGO
+            array.push(all_lines, line.new(bar_index - 60, l_entry, l_right, l_entry, color=color.yellow, width=2, style=line.style_dashed))
+            array.push(all_labels, label.new(l_right, l_entry, "ENTRADA L", color=color.new(color.yellow, 15), textcolor=color.black, size=size.small, style=label.style_label_left))
+
+            // Linea SL LARGO
+            array.push(all_lines, line.new(bar_index - 60, l_sl, l_right, l_sl, color=color.red, width=2, style=line.style_solid))
+            array.push(all_labels, label.new(l_right, l_sl, "SL L", color=color.new(color.red, 15), textcolor=color.white, size=size.small, style=label.style_label_left))
+
+            // Lineas TP LARGO
+            n_l_tps  = array.size(l_tp_prices)
+            l_tp_cnt = math.min(n_l_tps, 3)
+            if n_l_tps > 0
+                for t = 0 to l_tp_cnt - 1
+                    tp_price = array.get(l_tp_prices, t)
+                    rr       = l_risk > 0 ? (tp_price - l_entry) / l_risk : 0.0
+                    rr_txt   = str.tostring(math.round(rr * 10) / 10.0)
+                    tp_txt   = "TP" + str.tostring(t + 1) + " L  " + rr_txt + "R"
+                    tp_alpha = t == 0 ? 10 : t == 1 ? 30 : 55
+                    tp_col   = color.new(#00C853, tp_alpha)
+                    array.push(all_lines, line.new(bar_index - 60, tp_price, l_right, tp_price, color=tp_col, width=2, style=line.style_dashed))
+                    array.push(all_labels, label.new(l_right, tp_price, tp_txt, color=tp_col, textcolor=color.white, size=size.small, style=label.style_label_left))
+
+        // ── 7. Setup CORTO: resistencia mas cercana por encima del precio ─────
+        s_right   = bar_index + zone_extend
+
+        short_idx  = -1
+        short_dist = float(na)
+        for k = 0 to n - 1
+            idx     = array.get(sorted, k)
+            price   = array.get(sr_price, idx)
+            resist  = array.get(sr_resist, idx)
+            touches = array.get(sr_touches, idx)
+            if resist and price > cur_close and touches >= min_touches
+                dist = price - cur_close
+                if na(short_dist) or dist < short_dist
+                    short_dist := dist
+                    short_idx  := idx
+
+        if short_idx >= 0
+            sp      = array.get(sr_price, short_idx)
+            szone_h = sp * cluster_pct * 0.7 / 100.0
+            s_entry = sp - szone_h
+            s_sl    = sp + szone_h * sl_mult
+            s_risk  = s_sl - s_entry
+
+            // Buscar TPs: soportes por debajo de la entrada
+            s_tp_prices = array.new<float>()
+            for k = 0 to n - 1
+                idx     = array.get(sorted, k)
+                price   = array.get(sr_price, idx)
+                resist  = array.get(sr_resist, idx)
+                touches = array.get(sr_touches, idx)
+                if not resist and price < s_entry and touches >= min_touches
+                    array.push(s_tp_prices, price)
+            array.sort(s_tp_prices, order.descending)
+
+            // Linea entrada CORTO
+            array.push(all_lines, line.new(bar_index - 60, s_entry, s_right, s_entry, color=color.new(#FFD600, 0), width=2, style=line.style_dashed))
+            array.push(all_labels, label.new(s_right, s_entry, "ENTRADA C", color=color.new(#FFD600, 15), textcolor=color.black, size=size.small, style=label.style_label_left))
+
+            // Linea SL CORTO
+            array.push(all_lines, line.new(bar_index - 60, s_sl, s_right, s_sl, color=color.new(#FF1744, 0), width=2, style=line.style_solid))
+            array.push(all_labels, label.new(s_right, s_sl, "SL C", color=color.new(#FF1744, 15), textcolor=color.white, size=size.small, style=label.style_label_left))
+
+            // Lineas TP CORTO
+            n_s_tps  = array.size(s_tp_prices)
+            s_tp_cnt = math.min(n_s_tps, 3)
+            if n_s_tps > 0
+                for t = 0 to s_tp_cnt - 1
+                    tp_price = array.get(s_tp_prices, t)
+                    rr       = s_risk > 0 ? (s_entry - tp_price) / s_risk : 0.0
+                    rr_txt   = str.tostring(math.round(rr * 10) / 10.0)
+                    tp_txt   = "TP" + str.tostring(t + 1) + " C  " + rr_txt + "R"
+                    tp_alpha = t == 0 ? 10 : t == 1 ? 30 : 55
+                    tp_col   = color.new(#00E5FF, tp_alpha)
+                    array.push(all_lines, line.new(bar_index - 60, tp_price, s_right, tp_price, color=tp_col, width=2, style=line.style_dashed))
+                    array.push(all_labels, label.new(s_right, tp_price, tp_txt, color=tp_col, textcolor=color.white, size=size.small, style=label.style_label_left))
