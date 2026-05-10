@@ -1,0 +1,367 @@
+// ============================================================================
+// SMC Pro — Raul Trading Lab
+// Pine Script v5
+//
+// Porta la SMCStrategy del backtester Python al chart de TradingView.
+//
+// Componentes:
+//   · Market Structure: BOS y CHoCH con swing detection (ta.pivothigh/low)
+//   · Fair Value Gaps: cajas coloreadas con lógica exacta del Python (fvg.py)
+//   · Order Blocks: última vela contraria antes de cada BOS
+//   · EMA Filter: precio vs EMA lenta como filtro de tendencia
+//   · Premium / Discount: midline del rango de los últimos N swings
+//   · SL/TP: niveles ATR automáticos en cada señal
+//   · Régimen ADX: fondo coloreado según tendencia/lateral
+//   · Alertas: BUY / SELL configurables
+//
+// Configuración recomendada (ganadora del backtester):
+//   Swing Length = 10, SL mult = 2.0, TP mult = 4.0, EMA filter ON
+// ============================================================================
+
+//@version=5
+indicator(
+    title       = "SMC Pro — Raul Trading Lab",
+    overlay     = true,
+    max_boxes_count  = 500,
+    max_lines_count  = 500,
+    max_labels_count = 500
+)
+
+// ─── GRUPOS DE INPUTS ────────────────────────────────────────────────────────
+var string G_STR  = "📐 Market Structure"
+var string G_FVG  = "🔷 Fair Value Gaps"
+var string G_OB   = "🟩 Order Blocks"
+var string G_EMA  = "📈 EMA Filter"
+var string G_SIG  = "🎯 Señales y SL/TP"
+var string G_REG  = "🌡️ Régimen (ADX)"
+var string G_PD   = "⚖️ Premium / Discount"
+
+// ─── INPUTS ──────────────────────────────────────────────────────────────────
+
+// Market Structure
+swing_len    = input.int(10,    "Swing Length (velas a cada lado)", minval=3, maxval=50, group=G_STR)
+show_bos     = input.bool(true, "Mostrar BOS",   group=G_STR)
+show_choch   = input.bool(true, "Mostrar CHoCH", group=G_STR)
+col_bull_str = input.color(color.teal,   "Color alcista", group=G_STR, inline="sc")
+col_bear_str = input.color(color.red,    "Color bajista", group=G_STR, inline="sc")
+
+// FVG
+show_fvg     = input.bool(true,  "Mostrar FVGs",              group=G_FVG)
+require_fvg  = input.bool(false, "Exigir FVG para señal",     group=G_FVG)
+fvg_min_pct  = input.float(0.0, "Tamaño mínimo FVG (% precio)", minval=0.0, step=0.01, group=G_FVG)
+fvg_extend   = input.int(15,    "Extender caja N velas",       minval=1, maxval=50, group=G_FVG)
+
+// Order Blocks
+show_ob      = input.bool(true,  "Mostrar Order Blocks",      group=G_OB)
+require_ob   = input.bool(false, "Exigir OB para señal",      group=G_OB)
+ob_extend    = input.int(20,    "Extender OB N velas",        minval=1, maxval=100, group=G_OB)
+
+// EMA
+use_ema      = input.bool(true, "Activar filtro EMA",  group=G_EMA)
+ema_fast_len = input.int(21,   "EMA Rápida",           minval=2, group=G_EMA)
+ema_slow_len = input.int(200,  "EMA Lenta (tendencia)", minval=10, group=G_EMA)
+
+// SL/TP
+atr_len      = input.int(14,   "ATR Period",           minval=1,   group=G_SIG)
+sl_mult      = input.float(2.0,"SL Multiplicador ATR", minval=0.5, step=0.5, group=G_SIG)
+tp_mult      = input.float(4.0,"TP Multiplicador ATR", minval=0.5, step=0.5, group=G_SIG)
+show_sltp    = input.bool(true, "Mostrar SL/TP en señal", group=G_SIG)
+
+// Régimen ADX
+use_regime   = input.bool(false, "Filtrar laterales (ADX)",   group=G_REG)
+adx_len      = input.int(14,    "ADX Period",                  minval=1, group=G_REG)
+adx_thresh   = input.int(20,    "ADX umbral de tendencia",     minval=5, group=G_REG)
+show_regime_bg = input.bool(true,"Fondo régimen en chart",     group=G_REG)
+
+// Premium / Discount
+show_pd      = input.bool(true, "Mostrar midline P/D",  group=G_PD)
+pd_len       = input.int(100,  "Lookback rango P/D",   minval=20, group=G_PD)
+use_pd       = input.bool(false,"Exigir zona P/D para señal", group=G_PD)
+
+// ─── INDICADORES BASE ────────────────────────────────────────────────────────
+
+atr      = ta.atr(atr_len)
+ema_fast = ta.ema(close, ema_fast_len)
+ema_slow = ta.ema(close, ema_slow_len)
+
+// ADX
+[di_plus, di_minus, adx_val] = ta.dmi(adx_len, adx_len)
+is_trending = not use_regime or adx_val >= adx_thresh
+
+// ─── SWING DETECTION (ta.pivothigh / pivotlow) ────────────────────────────────
+// NOTA: pivot confirmado con retraso de swing_len velas (mira hacia atrás)
+
+ph = ta.pivothigh(high, swing_len, swing_len)  // pivot high confirmado
+pl = ta.pivotlow (low,  swing_len, swing_len)  // pivot low confirmado
+
+// Último swing high/low confirmado
+var float last_sh     = na
+var int   last_sh_bar = na
+var float last_sl     = na
+var int   last_sl_bar = na
+
+if not na(ph)
+    last_sh     := ph
+    last_sh_bar := bar_index - swing_len   // bar real donde ocurrió el pivot
+
+if not na(pl)
+    last_sl     := pl
+    last_sl_bar := bar_index - swing_len
+
+// ─── ESTRUCTURA DE MERCADO (BOS / CHoCH) ────────────────────────────────────
+
+// Tendencia actual: 1=bullish, -1=bearish, 0=indefinida
+var int trend = 0
+
+// Rotura de swing high (alcista) o swing low (bajista)
+bull_break = not na(last_sh) and close > last_sh and close[1] <= last_sh[1]
+bear_break = not na(last_sl) and close < last_sl and close[1] >= last_sl[1]
+
+// Clasificar según tendencia previa
+bull_bos   = bull_break and trend == 1    // continuación alcista
+bull_choch = bull_break and trend == -1   // cambio de carácter (de bajista a alcista)
+bear_bos   = bear_break and trend == -1   // continuación bajista
+bear_choch = bear_break and trend == 1    // cambio de carácter (de alcista a bajista)
+
+// Actualizar tendencia tras el evento
+if bull_break
+    trend := 1
+if bear_break
+    trend := -1
+
+// ─── FAIR VALUE GAPS ─────────────────────────────────────────────────────────
+// Lógica idéntica a fvg.py (conversión directa del Pine original 'raul smc'):
+//   Bullish FVG: low[0] > high[2]  AND  close[1] > high[2]
+//   Bearish FVG: high[0] < low[2]  AND  close[1] < low[2]
+//   Con filtro de tamaño mínimo (% precio)
+
+fvg_size_ok_bull = fvg_min_pct == 0.0 or (low - high[2]) / close * 100 >= fvg_min_pct
+fvg_size_ok_bear = fvg_min_pct == 0.0 or (low[2] - high) / close * 100 >= fvg_min_pct
+
+bull_fvg_raw = low > high[2] and close[1] > high[2] and fvg_size_ok_bull
+bear_fvg_raw = high < low[2] and close[1] < low[2]  and fvg_size_ok_bear
+
+// Guardar la última zona FVG activa para el filtro de señal
+var float fvg_bull_top = na
+var float fvg_bull_bot = na
+var float fvg_bear_top = na
+var float fvg_bear_bot = na
+
+if bull_fvg_raw
+    fvg_bull_top := low      // top del FVG alcista = low de vela actual
+    fvg_bull_bot := high[2]  // bot del FVG alcista = high de vela hace 2
+
+if bear_fvg_raw
+    fvg_bear_top := low[2]   // top del FVG bajista = low de hace 2
+    fvg_bear_bot := high     // bot del FVG bajista = high actual
+
+// Precio dentro de FVG activo?
+in_bull_fvg = not na(fvg_bull_top) and close >= fvg_bull_bot and close <= fvg_bull_top
+in_bear_fvg = not na(fvg_bear_top) and close >= fvg_bear_bot and close <= fvg_bear_top
+
+// Dibujar cajas FVG
+if show_fvg and bull_fvg_raw
+    box.new(bar_index - 2, high[2], bar_index + fvg_extend, low,
+            border_color = color.new(col_bull_str, 60),
+            bgcolor      = color.new(col_bull_str, 88),
+            border_width = 1)
+
+if show_fvg and bear_fvg_raw
+    box.new(bar_index - 2, high, bar_index + fvg_extend, low[2],
+            border_color = color.new(col_bear_str, 60),
+            bgcolor      = color.new(col_bear_str, 88),
+            border_width = 1)
+
+// ─── ORDER BLOCKS ─────────────────────────────────────────────────────────────
+// Bullish OB: última vela bajista (close < open) justo antes de un bullish BOS/CHoCH
+// Bearish OB: última vela alcista (close > open) justo antes de un bearish BOS/CHoCH
+
+var float ob_bull_top = na
+var float ob_bull_bot = na
+var int   ob_bull_bar = na
+var float ob_bear_top = na
+var float ob_bear_bot = na
+var int   ob_bear_bar = na
+
+if bull_break   // se dibuja tanto en BOS como en CHoCH
+    ob_bull_top := high[1]
+    ob_bull_bot := low[1]
+    ob_bull_bar := bar_index - 1
+
+if bear_break
+    ob_bear_top := high[1]
+    ob_bear_bot := low[1]
+    ob_bear_bar := bar_index - 1
+
+in_bull_ob = not na(ob_bull_top) and close >= ob_bull_bot and close <= ob_bull_top
+in_bear_ob = not na(ob_bear_top) and close >= ob_bear_bot and close <= ob_bear_top
+
+if show_ob and bull_break and not na(ob_bull_bar)
+    box.new(ob_bull_bar, ob_bull_bot, bar_index + ob_extend, ob_bull_top,
+            border_color = color.new(col_bull_str, 40),
+            bgcolor      = color.new(col_bull_str, 82),
+            border_width = 2)
+
+if show_ob and bear_break and not na(ob_bear_bar)
+    box.new(ob_bear_bar, ob_bear_bot, bar_index + ob_extend, ob_bear_top,
+            border_color = color.new(col_bear_str, 40),
+            bgcolor      = color.new(col_bear_str, 82),
+            border_width = 2)
+
+// ─── PREMIUM / DISCOUNT ───────────────────────────────────────────────────────
+// Midline del rango de pd_len velas: Discount < mid, Premium > mid
+
+range_high = ta.highest(high, pd_len)
+range_low  = ta.lowest (low,  pd_len)
+range_mid  = (range_high + range_low) / 2
+
+in_discount = close < range_mid
+in_premium  = close > range_mid
+
+// ─── FILTROS ──────────────────────────────────────────────────────────────────
+
+ema_bull_ok = not use_ema or (close > ema_slow and ema_fast > ema_slow)
+ema_bear_ok = not use_ema or (close < ema_slow and ema_fast < ema_slow)
+
+fvg_bull_ok = not require_fvg or in_bull_fvg
+fvg_bear_ok = not require_fvg or in_bear_fvg
+
+ob_bull_ok  = not require_ob or in_bull_ob
+ob_bear_ok  = not require_ob or in_bear_ob
+
+pd_bull_ok  = not use_pd or in_discount
+pd_bear_ok  = not use_pd or in_premium
+
+// ─── SEÑALES ─────────────────────────────────────────────────────────────────
+// Señal de compra: BOS alcista (o CHoCH alcista como setup de reversión)
+//   + EMA filter + zona Discount + FVG/OB opcionales + régimen activo
+
+buy_signal  = (bull_bos or bull_choch) and ema_bull_ok and pd_bull_ok and fvg_bull_ok and ob_bull_ok and is_trending
+sell_signal = (bear_bos or bear_choch) and ema_bear_ok and pd_bear_ok and fvg_bear_ok and ob_bear_ok and is_trending
+
+// ─── VISUALS ──────────────────────────────────────────────────────────────────
+
+// EMAs
+plot(use_ema ? ema_fast : na, "EMA Rápida",  color=color.new(color.yellow, 0),  linewidth=1)
+plot(use_ema ? ema_slow : na, "EMA Lenta",   color=color.new(color.white,  30), linewidth=2)
+
+// Premium/Discount midline
+plot(show_pd ? range_mid : na, "P/D Midline",
+     color     = color.new(color.purple, 50),
+     linewidth = 1,
+     style     = plot.style_circles)
+
+// Etiquetas BOS / CHoCH
+if show_bos and bull_bos
+    label.new(bar_index, low - atr * 0.8,
+              "BOS", style=label.style_label_up,
+              color    = color.new(col_bull_str, 75),
+              textcolor= col_bull_str,
+              size     = size.small)
+
+if show_bos and bear_bos
+    label.new(bar_index, high + atr * 0.8,
+              "BOS", style=label.style_label_down,
+              color    = color.new(col_bear_str, 75),
+              textcolor= col_bear_str,
+              size     = size.small)
+
+if show_choch and bull_choch
+    label.new(bar_index, low - atr * 0.8,
+              "CHoCH", style=label.style_label_up,
+              color    = color.new(color.lime, 65),
+              textcolor= color.lime,
+              size     = size.small)
+
+if show_choch and bear_choch
+    label.new(bar_index, high + atr * 0.8,
+              "CHoCH", style=label.style_label_down,
+              color    = color.new(color.orange, 65),
+              textcolor= color.orange,
+              size     = size.small)
+
+// Señales BUY / SELL
+plotshape(buy_signal,  "BUY",  shape.triangleup,   location.belowbar,
+          color=color.lime, size=size.normal)
+plotshape(sell_signal, "SELL", shape.triangledown,  location.abovebar,
+          color=color.red,  size=size.normal)
+
+// SL / TP al señalar
+var line sl_line = na
+var line tp_line = na
+
+if buy_signal and show_sltp
+    sl_px = close - sl_mult * atr
+    tp_px = close + tp_mult * atr
+    line.delete(sl_line)
+    line.delete(tp_line)
+    sl_line := line.new(bar_index, sl_px, bar_index + 25, sl_px,
+                         color=color.red,  width=2, style=line.style_dashed)
+    tp_line := line.new(bar_index, tp_px, bar_index + 25, tp_px,
+                         color=color.lime, width=2, style=line.style_dashed)
+    label.new(bar_index + 1, sl_px, "SL  " + str.tostring(math.round(sl_px, 2)),
+              style=label.style_label_right,
+              color=color.new(color.red, 80), textcolor=color.red, size=size.tiny)
+    label.new(bar_index + 1, tp_px, "TP  " + str.tostring(math.round(tp_px, 2)),
+              style=label.style_label_right,
+              color=color.new(color.lime, 80), textcolor=color.lime, size=size.tiny)
+
+if sell_signal and show_sltp
+    sl_px = close + sl_mult * atr
+    tp_px = close - tp_mult * atr
+    line.delete(sl_line)
+    line.delete(tp_line)
+    sl_line := line.new(bar_index, sl_px, bar_index + 25, sl_px,
+                         color=color.red,  width=2, style=line.style_dashed)
+    tp_line := line.new(bar_index, tp_px, bar_index + 25, tp_px,
+                         color=color.lime, width=2, style=line.style_dashed)
+    label.new(bar_index + 1, sl_px, "SL  " + str.tostring(math.round(sl_px, 2)),
+              style=label.style_label_right,
+              color=color.new(color.red, 80), textcolor=color.red, size=size.tiny)
+    label.new(bar_index + 1, tp_px, "TP  " + str.tostring(math.round(tp_px, 2)),
+              style=label.style_label_right,
+              color=color.new(color.lime, 80), textcolor=color.lime, size=size.tiny)
+
+// ─── FONDO RÉGIMEN ────────────────────────────────────────────────────────────
+
+regime_col = is_trending
+    ? (trend == 1 ? color.new(color.teal, 94) : color.new(color.red, 94))
+    : color.new(color.gray, 96)
+
+bgcolor(show_regime_bg ? regime_col : na, title="Régimen fondo")
+
+// ─── TABLA INFO ───────────────────────────────────────────────────────────────
+
+var table info_tbl = table.new(position.top_right, 2, 6,
+    bgcolor      = color.new(color.black, 70),
+    border_color = color.new(color.gray, 60),
+    border_width = 1)
+
+trend_str  = trend ==  1 ? "▲ ALCISTA" : trend == -1 ? "▼ BAJISTA" : "◆ NEUTRO"
+trend_col  = trend ==  1 ? color.teal  : trend == -1 ? color.red   : color.gray
+regime_str = is_trending ? "TENDENCIA" : "LATERAL"
+regime_c   = is_trending ? color.yellow : color.gray
+
+if barstate.islast
+    table.cell(info_tbl, 0, 0, "SMC PRO",          text_color=color.white,  text_size=size.small, bgcolor=color.new(color.navy, 50))
+    table.cell(info_tbl, 1, 0, "Raul Trading Lab",  text_color=color.silver, text_size=size.tiny,  bgcolor=color.new(color.navy, 50))
+    table.cell(info_tbl, 0, 1, "Tendencia",         text_color=color.silver, text_size=size.tiny)
+    table.cell(info_tbl, 1, 1, trend_str,           text_color=trend_col,    text_size=size.small)
+    table.cell(info_tbl, 0, 2, "Régimen",           text_color=color.silver, text_size=size.tiny)
+    table.cell(info_tbl, 1, 2, regime_str + "  ADX=" + str.tostring(math.round(adx_val, 1)),
+               text_color=regime_c, text_size=size.tiny)
+    table.cell(info_tbl, 0, 3, "ATR",               text_color=color.silver, text_size=size.tiny)
+    table.cell(info_tbl, 1, 3, str.tostring(math.round(atr, 4)) + "  (" + str.tostring(math.round(atr / close * 100, 2)) + "%)",
+               text_color=color.white, text_size=size.tiny)
+    table.cell(info_tbl, 0, 4, "Zona P/D",          text_color=color.silver, text_size=size.tiny)
+    table.cell(info_tbl, 1, 4, in_discount ? "DISCOUNT" : "PREMIUM",
+               text_color = in_discount ? color.teal : color.orange, text_size=size.tiny)
+    table.cell(info_tbl, 0, 5, "EMA Filter",        text_color=color.silver, text_size=size.tiny)
+    table.cell(info_tbl, 1, 5, use_ema ? (ema_fast > ema_slow ? "▲ Bullish" : "▼ Bearish") : "OFF",
+               text_color = use_ema ? (ema_fast > ema_slow ? color.teal : color.red) : color.gray, text_size=size.tiny)
+
+// ─── ALERTAS ──────────────────────────────────────────────────────────────────
+alertcondition(buy_signal,  "SMC BUY",  "SMC Pro ▲ BUY — {{ticker}} {{interval}} @ {{close}}")
+alertcondition(sell_signal, "SMC SELL", "SMC Pro ▼ SELL — {{ticker}} {{interval}} @ {{close}}")
+alertcondition(bull_choch,  "CHoCH Alcista (setup reversión)", "SMC: CHoCH alcista en {{ticker}}")
+alertcondition(bear_choch,  "CHoCH Bajista (setup reversión)", "SMC: CHoCH bajista en {{ticker}}")
