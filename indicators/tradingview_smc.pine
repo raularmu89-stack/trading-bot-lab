@@ -1,33 +1,24 @@
 // ============================================================================
-// SMC Pro — Raul Trading Lab
-// Pine Script v6
+// SMC Pro — Raul Trading Lab  |  Pine Script v6
 //
-// Porta la SMCStrategy del backtester Python al chart de TradingView.
-//
-// Componentes:
-//   · Market Structure : BOS y CHoCH con swing detection (ta.pivothigh/low)
-//   · Fair Value Gaps  : cajas coloreadas — lógica directa de fvg.py
-//   · Order Blocks     : última vela contraria antes de cada BOS
-//   · EMA Filter       : precio vs EMA lenta como filtro de tendencia
-//   · Premium/Discount : midline del rango de los últimos N swings
-//   · SL/TP            : niveles ATR automáticos en cada señal
-//   · Régimen ADX      : fondo coloreado según tendencia/lateral
-//   · Alertas          : BUY / SELL / CHoCH configurables
-//
-// Configuración recomendada (ganadora del backtester):
-//   Swing Length = 10 | SL mult = 2.0 | TP mult = 4.0 | EMA filter ON
+// REDISEÑO VISUAL:
+//   · Máx. N cajas FVG y OB visibles a la vez (se eliminan las más antiguas)
+//   · Zona eliminada automáticamente cuando el precio la mitiga
+//   · Solo 1 par SL/TP activo a la vez (labels borrados en cada señal nueva)
+//   · Fondo de régimen muy transparente para no tapar velas
+//   · Tabla compacta (5 filas)
 // ============================================================================
 
 //@version=6
 indicator(
     title            = "SMC Pro — Raul Trading Lab",
     overlay          = true,
-    max_boxes_count  = 500,
-    max_lines_count  = 500,
-    max_labels_count = 500
+    max_boxes_count  = 200,
+    max_lines_count  = 100,
+    max_labels_count = 200
 )
 
-// ─── USER-DEFINED TYPES (v6) ──────────────────────────────────────────────────
+// ─── TIPOS ────────────────────────────────────────────────────────────────────
 
 type FVGZone
     float top = na
@@ -40,98 +31,83 @@ type OBZone
 
 // ─── GRUPOS ───────────────────────────────────────────────────────────────────
 
-const string G_STR = "📐 Market Structure"
+const string G_STR = "📐 Structure"
 const string G_FVG = "🔷 Fair Value Gaps"
 const string G_OB  = "🟩 Order Blocks"
-const string G_EMA = "📈 EMA Filter"
-const string G_SIG = "🎯 Señales y SL/TP"
-const string G_REG = "🌡️ Régimen (ADX)"
+const string G_EMA = "📈 EMA"
+const string G_SIG = "🎯 Signals"
+const string G_REG = "🌡️ Regime"
 const string G_PD  = "⚖️ Premium / Discount"
 
 // ─── INPUTS ───────────────────────────────────────────────────────────────────
 
-// Market Structure
-int   swing_len    = input.int(10,    "Swing Length (velas a cada lado)", minval=3, maxval=50, group=G_STR)
-bool  show_bos     = input.bool(true, "Mostrar BOS",   group=G_STR)
-bool  show_choch   = input.bool(true, "Mostrar CHoCH", group=G_STR)
-color col_bull_str = input.color(color.teal, "Color alcista", group=G_STR, inline="sc")
-color col_bear_str = input.color(color.red,  "Color bajista", group=G_STR, inline="sc")
+int   swing_len = input.int(10,    "Swing Length",          minval=3, maxval=50, group=G_STR)
+bool  show_bos  = input.bool(true, "Show BOS labels",       group=G_STR)
+bool  show_choch= input.bool(true, "Show CHoCH labels",     group=G_STR)
+color col_bull  = input.color(color.new(#00bcd4, 0), "Bull color", group=G_STR, inline="c")
+color col_bear  = input.color(color.new(#ff5252, 0), "Bear color", group=G_STR, inline="c")
 
-// FVG
-bool  show_fvg    = input.bool(true,  "Mostrar FVGs",                 group=G_FVG)
-bool  require_fvg = input.bool(false, "Exigir FVG para señal",        group=G_FVG)
-float fvg_min_pct = input.float(0.0, "Tamaño mínimo FVG (% precio)", minval=0.0, step=0.01, group=G_FVG)
-int   fvg_extend  = input.int(15,    "Extender caja N velas",         minval=1, maxval=50,  group=G_FVG)
+bool  show_fvg    = input.bool(true,  "Show FVGs",              group=G_FVG)
+bool  require_fvg = input.bool(false, "Require FVG for signal", group=G_FVG)
+int   max_fvg     = input.int(3,     "Max visible FVGs",        minval=1, maxval=8, group=G_FVG)
+bool  fvg_mitig   = input.bool(true, "Delete when mitigated",   group=G_FVG)
 
-// Order Blocks
-bool show_ob    = input.bool(true,  "Mostrar Order Blocks", group=G_OB)
-bool require_ob = input.bool(false, "Exigir OB para señal", group=G_OB)
-int  ob_extend  = input.int(20,    "Extender OB N velas",  minval=1, maxval=100, group=G_OB)
+bool  show_ob    = input.bool(true,  "Show Order Blocks",       group=G_OB)
+bool  require_ob = input.bool(false, "Require OB for signal",   group=G_OB)
+int   max_ob     = input.int(2,     "Max visible OBs",          minval=1, maxval=5, group=G_OB)
+bool  ob_mitig   = input.bool(true, "Delete when mitigated",    group=G_OB)
 
-// EMA
-bool use_ema      = input.bool(true, "Activar filtro EMA",   group=G_EMA)
-int  ema_fast_len = input.int(21,   "EMA Rápida",            minval=2,  group=G_EMA)
-int  ema_slow_len = input.int(200,  "EMA Lenta (tendencia)", minval=10, group=G_EMA)
+bool use_ema      = input.bool(true, "EMA filter",              group=G_EMA)
+int  ema_fast_len = input.int(21,   "Fast EMA",                 minval=2,  group=G_EMA)
+int  ema_slow_len = input.int(200,  "Slow EMA",                 minval=10, group=G_EMA)
 
-// SL/TP
-int   atr_len   = input.int(14,    "ATR Period",            minval=1,   group=G_SIG)
-float sl_mult   = input.float(2.0, "SL Multiplicador ATR",  minval=0.5, step=0.5, group=G_SIG)
-float tp_mult   = input.float(4.0, "TP Multiplicador ATR",  minval=0.5, step=0.5, group=G_SIG)
-bool  show_sltp = input.bool(true, "Mostrar SL/TP en señal", group=G_SIG)
+int   atr_len   = input.int(14,    "ATR period",                minval=1,   group=G_SIG)
+float sl_mult   = input.float(2.0, "SL ATR mult",               minval=0.5, step=0.5, group=G_SIG)
+float tp_mult   = input.float(4.0, "TP ATR mult",               minval=0.5, step=0.5, group=G_SIG)
+bool  show_sltp = input.bool(true, "Show SL / TP",              group=G_SIG)
 
-// Régimen ADX
-bool use_regime     = input.bool(false, "Filtrar laterales (ADX)",  group=G_REG)
-int  adx_len        = input.int(14,    "ADX Period",                 minval=1, group=G_REG)
-int  adx_thresh     = input.int(20,    "ADX umbral de tendencia",    minval=5, group=G_REG)
-bool show_regime_bg = input.bool(true, "Fondo régimen en chart",     group=G_REG)
+bool use_regime     = input.bool(false, "ADX regime filter",    group=G_REG)
+int  adx_len        = input.int(14,    "ADX length",            minval=1, group=G_REG)
+int  adx_thresh     = input.int(20,    "ADX threshold",         minval=5, group=G_REG)
+bool show_regime_bg = input.bool(true, "Regime background",     group=G_REG)
 
-// Premium / Discount
-bool show_pd = input.bool(true,  "Mostrar midline P/D",        group=G_PD)
-int  pd_len  = input.int(100,   "Lookback rango P/D",         minval=20, group=G_PD)
-bool use_pd  = input.bool(false, "Exigir zona P/D para señal", group=G_PD)
+bool show_pd = input.bool(true,  "Show P/D midline",            group=G_PD)
+int  pd_len  = input.int(100,   "P/D lookback",                minval=20, group=G_PD)
+bool use_pd  = input.bool(false, "Require P/D zone",            group=G_PD)
 
-// ─── INDICADORES BASE ─────────────────────────────────────────────────────────
+// ─── INDICADORES ─────────────────────────────────────────────────────────────
 
 float atr      = ta.atr(atr_len)
 float ema_fast = ta.ema(close, ema_fast_len)
 float ema_slow = ta.ema(close, ema_slow_len)
 
-[di_plus, di_minus, adx_val] = ta.dmi(adx_len, adx_len)
+[_, _, adx_val] = ta.dmi(adx_len, adx_len)
 bool is_trending = not use_regime or adx_val >= adx_thresh
 
-// ─── SWING DETECTION ──────────────────────────────────────────────────────────
-// Pivots confirmados con retraso de swing_len velas
+// ─── SWINGS ───────────────────────────────────────────────────────────────────
 
 float ph = ta.pivothigh(high, swing_len, swing_len)
 float pl = ta.pivotlow (low,  swing_len, swing_len)
 
-var float last_sh     = na
-var int   last_sh_bar = na
-var float last_sl     = na
-var int   last_sl_bar = na
+var float last_sh = na
+var float last_sl = na
 
 if not na(ph)
-    last_sh     := ph
-    last_sh_bar := bar_index - swing_len
-
+    last_sh := ph
 if not na(pl)
-    last_sl     := pl
-    last_sl_bar := bar_index - swing_len
+    last_sl := pl
 
-// ─── ESTRUCTURA DE MERCADO ────────────────────────────────────────────────────
-// trend: 0=indefinido  1=bullish  -1=bearish
+// ─── ESTRUCTURA (BOS / CHoCH) ─────────────────────────────────────────────────
 
 var int trend = 0
 
-// Crossover limpio: cierre de hoy rompe, cierre de ayer no rompía
 bool bull_break = not na(last_sh) and close > last_sh and close[1] <= last_sh[1]
 bool bear_break = not na(last_sl) and close < last_sl and close[1] >= last_sl[1]
 
-// Clasificar según tendencia previa al evento
-bool bull_bos   = bull_break and trend == 1     // continuación alcista
-bool bull_choch = bull_break and trend == -1    // cambio de carácter → alcista
-bool bear_bos   = bear_break and trend == -1    // continuación bajista
-bool bear_choch = bear_break and trend == 1     // cambio de carácter → bajista
+bool bull_bos   = bull_break and trend == 1
+bool bull_choch = bull_break and trend == -1
+bool bear_bos   = bear_break and trend == -1
+bool bear_choch = bear_break and trend == 1
 
 if bull_break
     trend := 1
@@ -139,82 +115,150 @@ if bear_break
     trend := -1
 
 // ─── FAIR VALUE GAPS ──────────────────────────────────────────────────────────
-// Equivalente exacto de fvg.py (conversión del Pine original 'raul smc'):
-//   Bullish FVG : low[0] > high[2]  AND  close[1] > high[2]
-//   Bearish FVG : high[0] < low[2]  AND  close[1] < low[2]
+// Lógica: low[0] > high[2] AND close[1] > high[2]  (bullish)
+//         high[0] < low[2] AND close[1] < low[2]   (bearish)
 
-bool fvg_sz_bull = fvg_min_pct == 0.0 or (low - high[2]) / close * 100 >= fvg_min_pct
-bool fvg_sz_bear = fvg_min_pct == 0.0 or (low[2] - high) / close * 100 >= fvg_min_pct
+bool bull_fvg_raw = low > high[2] and close[1] > high[2]
+bool bear_fvg_raw = high < low[2] and close[1] < low[2]
 
-bool bull_fvg_raw = low > high[2] and close[1] > high[2] and fvg_sz_bull
-bool bear_fvg_raw = high < low[2] and close[1] < low[2]  and fvg_sz_bear
-
-var FVGZone bull_fvg_z = FVGZone.new()
-var FVGZone bear_fvg_z = FVGZone.new()
+// Zona más reciente (para filtro de señal)
+var FVGZone bull_fvg_sig = FVGZone.new()
+var FVGZone bear_fvg_sig = FVGZone.new()
 
 if bull_fvg_raw
-    bull_fvg_z.top := low      // top del gap = low de la vela actual
-    bull_fvg_z.bot := high[2]  // bot del gap = high de hace 2 velas
-
+    bull_fvg_sig.top := low
+    bull_fvg_sig.bot := high[2]
 if bear_fvg_raw
-    bear_fvg_z.top := low[2]
-    bear_fvg_z.bot := high
+    bear_fvg_sig.top := low[2]
+    bear_fvg_sig.bot := high
 
-bool in_bull_fvg = not na(bull_fvg_z.top) and close >= bull_fvg_z.bot and close <= bull_fvg_z.top
-bool in_bear_fvg = not na(bear_fvg_z.top) and close >= bear_fvg_z.bot and close <= bear_fvg_z.top
+bool in_bull_fvg = not na(bull_fvg_sig.top) and close >= bull_fvg_sig.bot and close <= bull_fvg_sig.top
+bool in_bear_fvg = not na(bear_fvg_sig.top) and close >= bear_fvg_sig.bot and close <= bear_fvg_sig.top
 
+// Arrays para gestión de cajas FVG
+var box[]   fvg_bull_b    = array.new<box>()
+var float[] fvg_bull_tops = array.new<float>()
+var float[] fvg_bull_bots = array.new<float>()
+var box[]   fvg_bear_b    = array.new<box>()
+var float[] fvg_bear_tops = array.new<float>()
+var float[] fvg_bear_bots = array.new<float>()
+
+// Mitigation: eliminar caja si precio entra en la zona
+if fvg_mitig
+    for i = array.size(fvg_bull_b) - 1 to 0 by -1
+        if close <= array.get(fvg_bull_tops, i) and close >= array.get(fvg_bull_bots, i)
+            box.delete(array.get(fvg_bull_b, i))
+            array.remove(fvg_bull_b, i)
+            array.remove(fvg_bull_tops, i)
+            array.remove(fvg_bull_bots, i)
+
+    for i = array.size(fvg_bear_b) - 1 to 0 by -1
+        if close <= array.get(fvg_bear_tops, i) and close >= array.get(fvg_bear_bots, i)
+            box.delete(array.get(fvg_bear_b, i))
+            array.remove(fvg_bear_b, i)
+            array.remove(fvg_bear_tops, i)
+            array.remove(fvg_bear_bots, i)
+
+// Añadir nueva caja FVG y purgar exceso
 if show_fvg and bull_fvg_raw
-    box.new(bar_index - 2, high[2], bar_index + fvg_extend, low,
-            border_color = color.new(col_bull_str, 60),
-            bgcolor      = color.new(col_bull_str, 88),
-            border_width = 1)
+    b = box.new(bar_index - 2, high[2], bar_index + 100, low,
+                border_color = color.new(col_bull, 55),
+                bgcolor      = color.new(col_bull, 91),
+                border_width = 1)
+    array.push(fvg_bull_b, b)
+    array.push(fvg_bull_tops, low)
+    array.push(fvg_bull_bots, high[2])
+    while array.size(fvg_bull_b) > max_fvg
+        box.delete(array.shift(fvg_bull_b))
+        array.shift(fvg_bull_tops)
+        array.shift(fvg_bull_bots)
 
 if show_fvg and bear_fvg_raw
-    box.new(bar_index - 2, high, bar_index + fvg_extend, low[2],
-            border_color = color.new(col_bear_str, 60),
-            bgcolor      = color.new(col_bear_str, 88),
-            border_width = 1)
+    b = box.new(bar_index - 2, high, bar_index + 100, low[2],
+                border_color = color.new(col_bear, 55),
+                bgcolor      = color.new(col_bear, 91),
+                border_width = 1)
+    array.push(fvg_bear_b, b)
+    array.push(fvg_bear_tops, low[2])
+    array.push(fvg_bear_bots, high)
+    while array.size(fvg_bear_b) > max_fvg
+        box.delete(array.shift(fvg_bear_b))
+        array.shift(fvg_bear_tops)
+        array.shift(fvg_bear_bots)
 
 // ─── ORDER BLOCKS ─────────────────────────────────────────────────────────────
-// Bullish OB : última vela bajista (close < open) antes de un BOS/CHoCH alcista
-// Bearish OB : última vela alcista (close > open) antes de un BOS/CHoCH bajista
 
-var OBZone bull_ob_z = OBZone.new()
-var OBZone bear_ob_z = OBZone.new()
+var OBZone bull_ob_sig = OBZone.new()
+var OBZone bear_ob_sig = OBZone.new()
 
 if bull_break
-    bull_ob_z.top   := high[1]
-    bull_ob_z.bot   := low[1]
-    bull_ob_z.bar_x := bar_index - 1
-
+    bull_ob_sig.top   := high[1]
+    bull_ob_sig.bot   := low[1]
+    bull_ob_sig.bar_x := bar_index - 1
 if bear_break
-    bear_ob_z.top   := high[1]
-    bear_ob_z.bot   := low[1]
-    bear_ob_z.bar_x := bar_index - 1
+    bear_ob_sig.top   := high[1]
+    bear_ob_sig.bot   := low[1]
+    bear_ob_sig.bar_x := bar_index - 1
 
-bool in_bull_ob = not na(bull_ob_z.top) and close >= bull_ob_z.bot and close <= bull_ob_z.top
-bool in_bear_ob = not na(bear_ob_z.top) and close >= bear_ob_z.bot and close <= bear_ob_z.top
+bool in_bull_ob = not na(bull_ob_sig.top) and close >= bull_ob_sig.bot and close <= bull_ob_sig.top
+bool in_bear_ob = not na(bear_ob_sig.top) and close >= bear_ob_sig.bot and close <= bear_ob_sig.top
 
-if show_ob and bull_break and not na(bull_ob_z.bar_x)
-    box.new(bull_ob_z.bar_x, bull_ob_z.bot, bar_index + ob_extend, bull_ob_z.top,
-            border_color = color.new(col_bull_str, 40),
-            bgcolor      = color.new(col_bull_str, 82),
-            border_width = 2)
+var box[]   ob_bull_b    = array.new<box>()
+var float[] ob_bull_tops = array.new<float>()
+var float[] ob_bull_bots = array.new<float>()
+var box[]   ob_bear_b    = array.new<box>()
+var float[] ob_bear_tops = array.new<float>()
+var float[] ob_bear_bots = array.new<float>()
 
-if show_ob and bear_break and not na(bear_ob_z.bar_x)
-    box.new(bear_ob_z.bar_x, bear_ob_z.bot, bar_index + ob_extend, bear_ob_z.top,
-            border_color = color.new(col_bear_str, 40),
-            bgcolor      = color.new(col_bear_str, 82),
-            border_width = 2)
+// Mitigation OBs
+if ob_mitig
+    for i = array.size(ob_bull_b) - 1 to 0 by -1
+        if close <= array.get(ob_bull_tops, i) and close >= array.get(ob_bull_bots, i)
+            box.delete(array.get(ob_bull_b, i))
+            array.remove(ob_bull_b, i)
+            array.remove(ob_bull_tops, i)
+            array.remove(ob_bull_bots, i)
+
+    for i = array.size(ob_bear_b) - 1 to 0 by -1
+        if close <= array.get(ob_bear_tops, i) and close >= array.get(ob_bear_bots, i)
+            box.delete(array.get(ob_bear_b, i))
+            array.remove(ob_bear_b, i)
+            array.remove(ob_bear_tops, i)
+            array.remove(ob_bear_bots, i)
+
+if show_ob and bull_break and not na(bull_ob_sig.bar_x)
+    b = box.new(bull_ob_sig.bar_x, bull_ob_sig.bot, bar_index + 100, bull_ob_sig.top,
+                border_color = color.new(col_bull, 30),
+                bgcolor      = color.new(col_bull, 84),
+                border_width = 2)
+    array.push(ob_bull_b, b)
+    array.push(ob_bull_tops, bull_ob_sig.top)
+    array.push(ob_bull_bots, bull_ob_sig.bot)
+    while array.size(ob_bull_b) > max_ob
+        box.delete(array.shift(ob_bull_b))
+        array.shift(ob_bull_tops)
+        array.shift(ob_bull_bots)
+
+if show_ob and bear_break and not na(bear_ob_sig.bar_x)
+    b = box.new(bear_ob_sig.bar_x, bear_ob_sig.bot, bar_index + 100, bear_ob_sig.top,
+                border_color = color.new(col_bear, 30),
+                bgcolor      = color.new(col_bear, 84),
+                border_width = 2)
+    array.push(ob_bear_b, b)
+    array.push(ob_bear_tops, bear_ob_sig.top)
+    array.push(ob_bear_bots, bear_ob_sig.bot)
+    while array.size(ob_bear_b) > max_ob
+        box.delete(array.shift(ob_bear_b))
+        array.shift(ob_bear_tops)
+        array.shift(ob_bear_bots)
 
 // ─── PREMIUM / DISCOUNT ───────────────────────────────────────────────────────
 
 float range_high = ta.highest(high, pd_len)
 float range_low  = ta.lowest (low,  pd_len)
 float range_mid  = (range_high + range_low) / 2.0
-
-bool in_discount = close < range_mid
-bool in_premium  = close > range_mid
+bool  in_discount = close < range_mid
+bool  in_premium  = close > range_mid
 
 // ─── FILTROS ──────────────────────────────────────────────────────────────────
 
@@ -234,116 +278,121 @@ bool sell_signal = (bear_bos or bear_choch) and ema_bear_ok and pd_bear_ok and f
 
 // ─── PLOT ─────────────────────────────────────────────────────────────────────
 
-plot(use_ema ? ema_fast : na, "EMA Rápida", color=color.new(color.yellow, 0),  linewidth=1)
-plot(use_ema ? ema_slow : na, "EMA Lenta",  color=color.new(color.white,  30), linewidth=2)
-plot(show_pd  ? range_mid : na, "P/D Midline",
-     color=color.new(color.purple, 50), linewidth=1, style=plot.style_circles)
+plot(use_ema ? ema_fast : na, "EMA Fast", color=color.new(color.yellow, 0),  linewidth=1)
+plot(use_ema ? ema_slow : na, "EMA Slow", color=color.new(color.white,  30), linewidth=2)
+plot(show_pd ? range_mid : na, "P/D Mid", color=color.new(color.purple, 55), linewidth=1, style=plot.style_circles)
 
 // BOS / CHoCH labels
 if show_bos and bull_bos
-    label.new(bar_index, low - atr * 0.8, "BOS",
-              style=label.style_label_up,
-              color=color.new(col_bull_str, 75), textcolor=col_bull_str, size=size.small)
+    label.new(bar_index, low - atr * 1.2, "BOS",
+              style=label.style_label_up, size=size.small,
+              color=color.new(col_bull, 80), textcolor=col_bull)
 
 if show_bos and bear_bos
-    label.new(bar_index, high + atr * 0.8, "BOS",
-              style=label.style_label_down,
-              color=color.new(col_bear_str, 75), textcolor=col_bear_str, size=size.small)
+    label.new(bar_index, high + atr * 1.2, "BOS",
+              style=label.style_label_down, size=size.small,
+              color=color.new(col_bear, 80), textcolor=col_bear)
 
 if show_choch and bull_choch
-    label.new(bar_index, low - atr * 0.8, "CHoCH",
-              style=label.style_label_up,
-              color=color.new(color.lime, 65), textcolor=color.lime, size=size.small)
+    label.new(bar_index, low - atr * 1.2, "CHoCH",
+              style=label.style_label_up, size=size.normal,
+              color=color.new(color.lime, 60), textcolor=color.lime)
 
 if show_choch and bear_choch
-    label.new(bar_index, high + atr * 0.8, "CHoCH",
-              style=label.style_label_down,
-              color=color.new(color.orange, 65), textcolor=color.orange, size=size.small)
+    label.new(bar_index, high + atr * 1.2, "CHoCH",
+              style=label.style_label_down, size=size.normal,
+              color=color.new(color.orange, 60), textcolor=color.orange)
 
-// Triángulos BUY / SELL
-plotshape(buy_signal,  "BUY",  shape.triangleup,   location.belowbar, color=color.lime, size=size.normal)
-plotshape(sell_signal, "SELL", shape.triangledown,  location.abovebar, color=color.red,  size=size.normal)
+// Triángulos de señal
+plotshape(buy_signal,  "BUY",  shape.triangleup,   location.belowbar, color=color.lime, size=size.large)
+plotshape(sell_signal, "SELL", shape.triangledown,  location.abovebar, color=color.red,  size=size.large)
 
-// SL / TP en cada señal
-var line sl_line = na
-var line tp_line = na
+// SL / TP — solo 1 activo (borra el anterior)
+var line  sl_line = na
+var line  tp_line = na
+var label sl_lbl  = na
+var label tp_lbl  = na
 
 if buy_signal and show_sltp
     float sl_px = close - sl_mult * atr
     float tp_px = close + tp_mult * atr
     line.delete(sl_line)
     line.delete(tp_line)
-    sl_line := line.new(bar_index, sl_px, bar_index + 25, sl_px, color=color.red,  width=2, style=line.style_dashed)
-    tp_line := line.new(bar_index, tp_px, bar_index + 25, tp_px, color=color.lime, width=2, style=line.style_dashed)
-    label.new(bar_index + 1, sl_px, "SL  " + str.format("{0,number,#.####}", sl_px),
-              style=label.style_label_right, color=color.new(color.red, 80),  textcolor=color.red,  size=size.tiny)
-    label.new(bar_index + 1, tp_px, "TP  " + str.format("{0,number,#.####}", tp_px),
-              style=label.style_label_right, color=color.new(color.lime, 80), textcolor=color.lime, size=size.tiny)
+    label.delete(sl_lbl)
+    label.delete(tp_lbl)
+    sl_line := line.new(bar_index, sl_px, bar_index + 30, sl_px,
+                        color=color.red,  width=2, style=line.style_dashed)
+    tp_line := line.new(bar_index, tp_px, bar_index + 30, tp_px,
+                        color=color.lime, width=2, style=line.style_dashed)
+    sl_lbl  := label.new(bar_index + 30, sl_px,
+                         "SL " + str.format("{0,number,#.####}", sl_px),
+                         style=label.style_label_left,
+                         color=color.new(color.red, 75), textcolor=color.red, size=size.small)
+    tp_lbl  := label.new(bar_index + 30, tp_px,
+                         "TP " + str.format("{0,number,#.####}", tp_px),
+                         style=label.style_label_left,
+                         color=color.new(color.lime, 75), textcolor=color.lime, size=size.small)
 
 if sell_signal and show_sltp
     float sl_px = close + sl_mult * atr
     float tp_px = close - tp_mult * atr
     line.delete(sl_line)
     line.delete(tp_line)
-    sl_line := line.new(bar_index, sl_px, bar_index + 25, sl_px, color=color.red,  width=2, style=line.style_dashed)
-    tp_line := line.new(bar_index, tp_px, bar_index + 25, tp_px, color=color.lime, width=2, style=line.style_dashed)
-    label.new(bar_index + 1, sl_px, "SL  " + str.format("{0,number,#.####}", sl_px),
-              style=label.style_label_right, color=color.new(color.red, 80),  textcolor=color.red,  size=size.tiny)
-    label.new(bar_index + 1, tp_px, "TP  " + str.format("{0,number,#.####}", tp_px),
-              style=label.style_label_right, color=color.new(color.lime, 80), textcolor=color.lime, size=size.tiny)
+    label.delete(sl_lbl)
+    label.delete(tp_lbl)
+    sl_line := line.new(bar_index, sl_px, bar_index + 30, sl_px,
+                        color=color.red,  width=2, style=line.style_dashed)
+    tp_line := line.new(bar_index, tp_px, bar_index + 30, tp_px,
+                        color=color.lime, width=2, style=line.style_dashed)
+    sl_lbl  := label.new(bar_index + 30, sl_px,
+                         "SL " + str.format("{0,number,#.####}", sl_px),
+                         style=label.style_label_left,
+                         color=color.new(color.red, 75), textcolor=color.red, size=size.small)
+    tp_lbl  := label.new(bar_index + 30, tp_px,
+                         "TP " + str.format("{0,number,#.####}", tp_px),
+                         style=label.style_label_left,
+                         color=color.new(color.lime, 75), textcolor=color.lime, size=size.small)
 
 // ─── FONDO RÉGIMEN ────────────────────────────────────────────────────────────
-// switch expression (v6): sustituye la cadena de ternarios anidados
 
 color regime_col = switch
-    is_trending and trend == 1  => color.new(color.teal, 94)
-    is_trending and trend == -1 => color.new(color.red,  94)
-    =>                             color.new(color.gray, 96)
+    is_trending and trend == 1  => color.new(color.teal, 96)
+    is_trending and trend == -1 => color.new(color.red,  96)
+    =>                             color.new(color.gray, 97)
 
-bgcolor(show_regime_bg ? regime_col : na, title="Régimen fondo")
+bgcolor(show_regime_bg ? regime_col : na, title="Regime")
 
-// ─── TABLA INFO ───────────────────────────────────────────────────────────────
+// ─── TABLA ────────────────────────────────────────────────────────────────────
 
-var table info_tbl = table.new(position.top_right, 2, 6,
-    bgcolor      = color.new(color.black, 70),
-    border_color = color.new(color.gray, 60),
-    border_width = 1)
+var table tbl = table.new(position.top_right, 2, 5,
+    bgcolor=color.new(color.black, 72), border_color=color.new(color.gray, 65), border_width=1)
 
-// switch sobre variable entera (v6)
 string trend_str = switch trend
-    1  => "▲ ALCISTA"
-    -1 => "▼ BAJISTA"
-    =>    "◆ NEUTRO"
-
+    1  => "▲ BULLISH"
+    -1 => "▼ BEARISH"
+    =>    "◆ NEUTRAL"
 color trend_col = switch trend
-    1  => color.teal
-    -1 => color.red
+    1  => col_bull
+    -1 => col_bear
     =>    color.gray
 
-string regime_str = is_trending ? "TENDENCIA" : "LATERAL"
-color  regime_c   = is_trending ? color.yellow : color.gray
-string ema_str    = not use_ema ? "OFF" : ema_fast > ema_slow ? "▲ Bullish" : "▼ Bearish"
-color  ema_col    = not use_ema ? color.gray  : ema_fast > ema_slow ? color.teal : color.red
-
 if barstate.islast
-    table.cell(info_tbl, 0, 0, "SMC PRO",         text_color=color.white,  text_size=size.small, bgcolor=color.new(color.navy, 50))
-    table.cell(info_tbl, 1, 0, "Raul Trading Lab", text_color=color.silver, text_size=size.tiny,  bgcolor=color.new(color.navy, 50))
-    table.cell(info_tbl, 0, 1, "Tendencia",        text_color=color.silver, text_size=size.tiny)
-    table.cell(info_tbl, 1, 1, trend_str,          text_color=trend_col,    text_size=size.small)
-    table.cell(info_tbl, 0, 2, "Régimen",          text_color=color.silver, text_size=size.tiny)
-    table.cell(info_tbl, 1, 2, regime_str + "  ADX=" + str.format("{0,number,#.#}", adx_val),
-               text_color=regime_c, text_size=size.tiny)
-    table.cell(info_tbl, 0, 3, "ATR",              text_color=color.silver, text_size=size.tiny)
-    table.cell(info_tbl, 1, 3, str.format("{0,number,#.####}", atr) + "  (" + str.format("{0,number,#.##}", atr / close * 100) + "%)",
+    table.cell(tbl, 0, 0, "SMC PRO",  text_color=color.white,  text_size=size.small, bgcolor=color.new(color.navy, 50))
+    table.cell(tbl, 1, 0, "Raul Lab", text_color=color.silver, text_size=size.tiny,  bgcolor=color.new(color.navy, 50))
+    table.cell(tbl, 0, 1, "Trend",    text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 1, 1, trend_str,  text_color=trend_col,    text_size=size.small)
+    table.cell(tbl, 0, 2, "ADX",      text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 1, 2, str.format("{0,number,#.#}", adx_val) + (is_trending ? " ▸TREND" : " ▸RANGE"),
+               text_color=is_trending ? color.yellow : color.gray, text_size=size.tiny)
+    table.cell(tbl, 0, 3, "ATR%",     text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 1, 3, str.format("{0,number,#.##}", atr / close * 100) + "%",
                text_color=color.white, text_size=size.tiny)
-    table.cell(info_tbl, 0, 4, "Zona P/D",         text_color=color.silver, text_size=size.tiny)
-    table.cell(info_tbl, 1, 4, in_discount ? "DISCOUNT" : "PREMIUM",
-               text_color=in_discount ? color.teal : color.orange, text_size=size.tiny)
-    table.cell(info_tbl, 0, 5, "EMA Filter",       text_color=color.silver, text_size=size.tiny)
-    table.cell(info_tbl, 1, 5, ema_str,            text_color=ema_col,      text_size=size.tiny)
+    table.cell(tbl, 0, 4, "Zone",     text_color=color.silver, text_size=size.tiny)
+    table.cell(tbl, 1, 4, in_discount ? "DISCOUNT" : "PREMIUM",
+               text_color=in_discount ? col_bull : col_bear, text_size=size.tiny)
 
 // ─── ALERTAS ──────────────────────────────────────────────────────────────────
-alertcondition(buy_signal,  "SMC BUY",               "SMC Pro ▲ BUY — {{ticker}} {{interval}} @ {{close}}")
-alertcondition(sell_signal, "SMC SELL",              "SMC Pro ▼ SELL — {{ticker}} {{interval}} @ {{close}}")
-alertcondition(bull_choch,  "CHoCH Alcista (setup)", "SMC: CHoCH alcista en {{ticker}}")
-alertcondition(bear_choch,  "CHoCH Bajista (setup)", "SMC: CHoCH bajista en {{ticker}}")
+alertcondition(buy_signal,  "SMC BUY",          "SMC ▲ BUY — {{ticker}} {{interval}} @ {{close}}")
+alertcondition(sell_signal, "SMC SELL",         "SMC ▼ SELL — {{ticker}} {{interval}} @ {{close}}")
+alertcondition(bull_choch,  "CHoCH Bull setup", "SMC: CHoCH alcista en {{ticker}}")
+alertcondition(bear_choch,  "CHoCH Bear setup", "SMC: CHoCH bajista en {{ticker}}")
