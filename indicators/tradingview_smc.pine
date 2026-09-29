@@ -144,7 +144,7 @@ var float[] fvg_bear_tops = array.new<float>()
 var float[] fvg_bear_bots = array.new<float>()
 
 // Mitigation: eliminar caja si precio entra en la zona
-if fvg_mitig
+if fvg_mitig and array.size(fvg_bull_b) > 0
     for i = array.size(fvg_bull_b) - 1 to 0 by -1
         if close <= array.get(fvg_bull_tops, i) and close >= array.get(fvg_bull_bots, i)
             box.delete(array.get(fvg_bull_b, i))
@@ -152,6 +152,7 @@ if fvg_mitig
             array.remove(fvg_bull_tops, i)
             array.remove(fvg_bull_bots, i)
 
+if fvg_mitig and array.size(fvg_bear_b) > 0
     for i = array.size(fvg_bear_b) - 1 to 0 by -1
         if close <= array.get(fvg_bear_tops, i) and close >= array.get(fvg_bear_bots, i)
             box.delete(array.get(fvg_bear_b, i))
@@ -211,7 +212,7 @@ var float[] ob_bear_tops = array.new<float>()
 var float[] ob_bear_bots = array.new<float>()
 
 // Mitigation OBs
-if ob_mitig
+if ob_mitig and array.size(ob_bull_b) > 0
     for i = array.size(ob_bull_b) - 1 to 0 by -1
         if close <= array.get(ob_bull_tops, i) and close >= array.get(ob_bull_bots, i)
             box.delete(array.get(ob_bull_b, i))
@@ -219,6 +220,7 @@ if ob_mitig
             array.remove(ob_bull_tops, i)
             array.remove(ob_bull_bots, i)
 
+if ob_mitig and array.size(ob_bear_b) > 0
     for i = array.size(ob_bear_b) - 1 to 0 by -1
         if close <= array.get(ob_bear_tops, i) and close >= array.get(ob_bear_bots, i)
             box.delete(array.get(ob_bear_b, i))
